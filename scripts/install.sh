@@ -34,8 +34,8 @@ print_banner() {
     echo -e "${CYAN}"
     echo "╔══════════════════════════════════════════╗"
     echo "║                                          ║"
-    echo "║          NaivePanel Installer             ║"
-    echo "║      NaiveProxy Management Panel          ║"
+    echo "║          NaivePanel Installer            ║"
+    echo "║      NaiveProxy Management Panel         ║"
     echo "║                                          ║"
     echo "╚══════════════════════════════════════════╝"
     echo -e "${NC}"
@@ -87,17 +87,17 @@ install_deps() {
     case $OS in
         ubuntu|debian)
             apt-get update -qq
-            apt-get install -y -qq curl tar jq file > /dev/null 2>&1
+            apt-get install -y -qq curl tar jq file git golang-go > /dev/null 2>&1
             ;;
         centos|rhel|rocky|alma|fedora)
-            yum install -y -q curl tar jq file > /dev/null 2>&1
+            yum install -y -q curl tar jq file git golang > /dev/null 2>&1
             ;;
         arch|manjaro)
-            pacman -Sy --noconfirm curl tar jq file > /dev/null 2>&1
+            pacman -Sy --noconfirm curl tar jq file git go > /dev/null 2>&1
             ;;
         *)
             log_warn "Unknown package manager, trying apt..."
-            apt-get update -qq && apt-get install -y -qq curl tar jq file > /dev/null 2>&1
+            apt-get update -qq && apt-get install -y -qq curl tar jq file git golang-go > /dev/null 2>&1
             ;;
     esac
     log_ok "Dependencies installed"
@@ -134,47 +134,30 @@ download_naive() {
     log_ok "NaiveProxy downloaded to ${INSTALL_DIR}/naive"
 }
 
-download_panel() {
-    log_info "Downloading NaivePanel..."
+build_panel() {
+    log_info "Building NaivePanel from source..."
 
-    local DOWNLOAD_URL
-    local RELEASE_URL="https://api.github.com/repos/${PANEL_REPO}/releases/latest"
-    local RELEASE_INFO
-    RELEASE_INFO=$(curl -sL "$RELEASE_URL" 2>/dev/null || echo "")
+    local BUILD_DIR="/tmp/naivepanel_build"
+    rm -rf "$BUILD_DIR"
 
-    if [[ -z "$RELEASE_INFO" || "$RELEASE_INFO" == *"Not Found"* ]]; then
-        log_warn "Could not fetch panel release via API. Trying direct download..."
-        DOWNLOAD_URL="https://github.com/${PANEL_REPO}/releases/latest/download/naivepanel-linux-${ARCH}"
-    else
-        DOWNLOAD_URL=$(echo "$RELEASE_INFO" | jq -r ".assets[] | select(.name | contains(\"naivepanel-linux-${ARCH}\")) | .browser_download_url" | head -1)
-    fi
-
-    if [[ -z "$DOWNLOAD_URL" || "$DOWNLOAD_URL" == "null" ]]; then
-        log_error "Could not find NaivePanel binary for linux-${ARCH}"
-        log_info "You can build from source: go build -o ${INSTALL_DIR}/naivepanel"
+    log_info "Cloning repository: https://github.com/${PANEL_REPO}.git"
+    if ! git clone "https://github.com/${PANEL_REPO}.git" "$BUILD_DIR" --quiet; then
+        log_error "Failed to clone repository"
         return 1
     fi
 
-    log_info "Downloading from: ${DOWNLOAD_URL}"
-    # Use -f to fail on 404
-    if ! curl -#Lf "$DOWNLOAD_URL" -o "${INSTALL_DIR}/naivepanel"; then
-        log_error "Failed to download binary. Please check your repository releases."
+    cd "$BUILD_DIR"
+    log_info "Compiling (this may take a minute)..."
+    if ! go build -ldflags="-s -w" -o "${INSTALL_DIR}/naivepanel" main.go; then
+        log_error "Failed to build NaivePanel. Ensure Go is properly installed."
+        cd - > /dev/null
         return 1
-    fi
-
-    # Check if it's a valid ELF binary. Note: 'file' command might not be available on all systems,
-    # but we installed it in install_deps (actually it's not in there, let's add it).
-    if command -v file >/dev/null 2>&1; then
-        if ! file "${INSTALL_DIR}/naivepanel" | grep -q "ELF"; then
-            log_error "Downloaded file is not a valid Linux binary (Exec format error prevention)."
-            log_info "It might be an HTML error page or a Windows binary."
-            mv "${INSTALL_DIR}/naivepanel" "${INSTALL_DIR}/naivepanel.error"
-            return 1
-        fi
     fi
 
     chmod +x "${INSTALL_DIR}/naivepanel"
-    log_ok "NaivePanel downloaded to ${INSTALL_DIR}/naivepanel"
+    cd - > /dev/null
+    rm -rf "$BUILD_DIR"
+    log_ok "NaivePanel built and installed to ${INSTALL_DIR}/naivepanel"
 }
 
 create_service() {
@@ -289,7 +272,7 @@ main() {
 
     install_deps
     download_naive
-    download_panel
+    build_panel
     create_service
     start_service
     show_credentials

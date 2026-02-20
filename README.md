@@ -7,14 +7,14 @@
 
 ## 🚀 Features
 
-- **One-Command Installation**: Deploy a fully functional NaiveProxy server and panel in seconds.
+- **One-Command Installation**: Deploy a fully functional NaiveProxy server and panel in seconds (builds from source for maximum compatibility).
 - **Modern UI**: A premium dark-themed interface with glassmorphism aesthetics and responsive design.
 - **Dynamic Caddyfile**: Automatically generates and reloads Caddy configuration on the fly.
 - **Multi-User Support**: Create and manage multiple users with individual traffic limits.
 - **Traffic Monitoring**: Real-time server status, uptime, and traffic statistics.
 - **ACME Support**: Built-in Let's Encrypt SSL certificate management via Caddy.
 - **Connection Links**: Instantly generate `naive+https://` URI and QR codes for clients.
-- **Lightweight**: Written in Go, distributed as a single binary with zero external dependencies (beside NaiveProxy itself).
+- **Zero-Dependency Core**: Written in Go, static assets are embedded into a single binary.
 
 ## 🛠 Tech Stack
 
