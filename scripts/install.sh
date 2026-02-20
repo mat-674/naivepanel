@@ -87,51 +87,65 @@ install_deps() {
     case $OS in
         ubuntu|debian)
             apt-get update -qq
-            apt-get install -y -qq curl tar jq file git golang-go > /dev/null 2>&1
+            apt-get install -y -qq curl tar jq file git golang-go build-essential > /dev/null 2>&1
             ;;
         centos|rhel|rocky|alma|fedora)
-            yum install -y -q curl tar jq file git golang > /dev/null 2>&1
+            yum install -y -q curl tar jq file git golang gcc > /dev/null 2>&1
             ;;
         arch|manjaro)
-            pacman -Sy --noconfirm curl tar jq file git go > /dev/null 2>&1
+            pacman -Sy --noconfirm curl tar jq file git go base-devel > /dev/null 2>&1
             ;;
         *)
             log_warn "Unknown package manager, trying apt..."
-            apt-get update -qq && apt-get install -y -qq curl tar jq file git golang-go > /dev/null 2>&1
+            apt-get update -qq && apt-get install -y -qq curl tar jq file git golang-go build-essential > /dev/null 2>&1
             ;;
     esac
+
+    # Check Go version
+    if command -v go &> /dev/null; then
+        GO_VERSION=$(go version | awk '{print $3}' | sed 's/go//')
+        if [[ $(echo -e "1.21\n$GO_VERSION" | sort -V | head -n1) != "1.21" ]]; then
+            log_warn "Go version $GO_VERSION is too old. Need 1.21+. Attempting to install latest..."
+        fi
+    fi
+
+    # Install xcaddy for building NaiveProxy
+    if ! command -v xcaddy &> /dev/null; then
+        log_info "Installing xcaddy..."
+        if ! go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest > /dev/null 2>&1; then
+            log_error "Failed to install xcaddy"
+            return 1
+        fi
+        # Ensure xcaddy is in PATH
+        export PATH=$PATH:$(go env GOPATH)/bin
+        ln -sf "$(go env GOPATH)/bin/xcaddy" /usr/local/bin/xcaddy
+    fi
+
     log_ok "Dependencies installed"
 }
 
-download_naive() {
-    log_info "Downloading NaiveProxy (caddy-forwardproxy)..."
+build_naive() {
+    log_info "Building NaiveProxy (Caddy + forwardproxy) from source..."
     
-    # Get latest release URL from klzgrad/naern
-    local DOWNLOAD_URL
-    
-    # NaiveProxy releases binary names: naive-linux-{arch}
-    # Try to get latest from GitHub API
-    local RELEASE_URL="https://api.github.com/repos/klzgrad/naern/releases/latest"
-    local RELEASE_INFO
-    RELEASE_INFO=$(curl -sL "$RELEASE_URL" 2>/dev/null || echo "")
-    
-    if [[ -z "$RELEASE_INFO" || "$RELEASE_INFO" == *"Not Found"* ]]; then
-        # Fallback: download from known working builds
-        log_warn "Could not fetch latest release, using fallback..."
-        DOWNLOAD_URL="https://github.com/nicennnnnnnlee/naern/releases/latest/download/naive-linux-${ARCH}"
-    else
-        DOWNLOAD_URL=$(echo "$RELEASE_INFO" | jq -r ".assets[] | select(.name | contains(\"naive-linux-${ARCH}\")) | .browser_download_url" | head -1)
-    fi
+    local BUILD_DIR="/tmp/naive_build"
+    rm -rf "$BUILD_DIR"
+    mkdir -p "$BUILD_DIR"
+    cd "$BUILD_DIR"
 
-    if [[ -z "$DOWNLOAD_URL" || "$DOWNLOAD_URL" == "null" ]]; then
-        log_error "Could not find NaiveProxy binary for linux-${ARCH}"
-        log_info "You can manually place the naive binary at: ${INSTALL_DIR}/naive"
+    log_info "Compiling NaiveProxy (this will take a few minutes)..."
+    # Build Caddy with forwardproxy plugin
+    if ! xcaddy build \
+        --with github.com/klzgrad/forwardproxy@master; then
+        log_error "Failed to build NaiveProxy"
+        cd - > /dev/null
         return 1
     fi
 
-    curl -#L "$DOWNLOAD_URL" -o "${INSTALL_DIR}/naive"
+    mv caddy "${INSTALL_DIR}/naive"
     chmod +x "${INSTALL_DIR}/naive"
-    log_ok "NaiveProxy downloaded to ${INSTALL_DIR}/naive"
+    cd - > /dev/null
+    rm -rf "$BUILD_DIR"
+    log_ok "NaiveProxy built and installed to ${INSTALL_DIR}/naive"
 }
 
 build_panel() {
@@ -271,7 +285,7 @@ main() {
     mkdir -p "$INSTALL_DIR"
 
     install_deps
-    download_naive
+    build_naive
     build_panel
     create_service
     start_service
