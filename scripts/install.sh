@@ -172,6 +172,12 @@ build_panel() {
     cd - > /dev/null
     rm -rf "$BUILD_DIR"
     log_ok "NaivePanel built and installed to ${INSTALL_DIR}/naivepanel"
+
+    # Setup database and capture credentials
+    log_info "Initializing database..."
+    SETUP_OUTPUT=$("${INSTALL_DIR}/naivepanel" --data-dir "${INSTALL_DIR}" --setup || true)
+    ADMIN_USER=$(echo "$SETUP_OUTPUT" | grep "Admin Username:" | awk '{print $4}')
+    ADMIN_PASS=$(echo "$SETUP_OUTPUT" | grep "Admin Password:" | awk '{print $4}')
 }
 
 create_service() {
@@ -226,11 +232,13 @@ show_credentials() {
         echo -e "${CYAN}║${NC}  Panel URL: ${GREEN}http://${IP}:${PORT}${NC}"
     fi
 
+    if [[ -n "${ADMIN_USER:-}" && -n "${ADMIN_PASS:-}" ]]; then
+        echo -e "${CYAN}║${NC}  Username:  ${GREEN}${ADMIN_USER}${NC}"
+        echo -e "${CYAN}║${NC}  Password:  ${GREEN}${ADMIN_PASS}${NC}"
+    fi
+
     echo -e "${CYAN}║${NC}"
     echo -e "${CYAN}║${NC}  Check logs:  ${YELLOW}journalctl -u ${SERVICE_NAME} -f${NC}"
-    echo -e "${CYAN}║${NC}  Credentials are shown in the service logs"
-    echo -e "${CYAN}║${NC}  Run: ${YELLOW}journalctl -u ${SERVICE_NAME} | head -20${NC}"
-    echo -e "${CYAN}║${NC}"
     echo -e "${CYAN}║${NC}  ${RED}⚠  Save your admin credentials!${NC}"
     echo -e "${CYAN}╚══════════════════════════════════════════════════╝${NC}"
     echo ""

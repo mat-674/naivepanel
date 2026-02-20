@@ -26,6 +26,7 @@ func main() {
 	configPath := flag.String("config", "", "Path to config file")
 	dataDir := flag.String("data-dir", "", "Data directory")
 	port := flag.Int("port", 0, "Panel port (overrides config)")
+	setup := flag.Bool("setup", false, "Initialize database and print credentials, then exit")
 	flag.Parse()
 
 	// Determine config path
@@ -72,7 +73,7 @@ func main() {
 			log.Fatalf("Failed to create admin: %v", err)
 		}
 		fmt.Println("╔══════════════════════════════════════════╗")
-		fmt.Println("║        NaivePanel — First Run Setup      ║")
+		fmt.Println("║        NaivePanel — Setup Complete       ║")
 		fmt.Println("╠══════════════════════════════════════════╣")
 		fmt.Printf("║  Admin Username: %-24s║\n", adminUser)
 		fmt.Printf("║  Admin Password: %-24s║\n", adminPass)
@@ -80,6 +81,12 @@ func main() {
 		fmt.Println("╠══════════════════════════════════════════╣")
 		fmt.Println("║  ⚠  SAVE THESE CREDENTIALS NOW!  ⚠      ║")
 		fmt.Println("╚══════════════════════════════════════════╝")
+	} else if *setup {
+		fmt.Println("Admin already exists. Setup skipped.")
+	}
+
+	if *setup {
+		return
 	}
 
 	// Initialize default settings if needed
