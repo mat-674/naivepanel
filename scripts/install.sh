@@ -134,8 +134,8 @@ build_naive() {
 
     log_info "Compiling NaiveProxy (this will take a few minutes)..."
     # Build Caddy with forwardproxy plugin
-    if ! xcaddy build \
-        --with github.com/klzgrad/forwardproxy@master; then
+    if ! xcaddy build v2.9.1 \
+        --with github.com/caddyserver/forwardproxy=github.com/klzgrad/forwardproxy@master; then
         log_error "Failed to build NaiveProxy"
         cd - > /dev/null
         return 1
