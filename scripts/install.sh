@@ -25,7 +25,7 @@ NC='\033[0m'
 INSTALL_DIR="/opt/naivepanel"
 SERVICE_NAME="naivepanel"
 NAIVE_REPO="klzgrad/naern"
-PANEL_REPO="YOUR_USER/naivepanel"
+PANEL_REPO="mat-674/naivepanel"
 CONFIG_FILE="${INSTALL_DIR}/config.json"
 
 # --- Functions ---
@@ -87,17 +87,17 @@ install_deps() {
     case $OS in
         ubuntu|debian)
             apt-get update -qq
-            apt-get install -y -qq curl tar jq > /dev/null 2>&1
+            apt-get install -y -qq curl tar jq file > /dev/null 2>&1
             ;;
         centos|rhel|rocky|alma|fedora)
-            yum install -y -q curl tar jq > /dev/null 2>&1
+            yum install -y -q curl tar jq file > /dev/null 2>&1
             ;;
         arch|manjaro)
-            pacman -Sy --noconfirm curl tar jq > /dev/null 2>&1
+            pacman -Sy --noconfirm curl tar jq file > /dev/null 2>&1
             ;;
         *)
             log_warn "Unknown package manager, trying apt..."
-            apt-get update -qq && apt-get install -y -qq curl tar jq > /dev/null 2>&1
+            apt-get update -qq && apt-get install -y -qq curl tar jq file > /dev/null 2>&1
             ;;
     esac
     log_ok "Dependencies installed"
@@ -143,7 +143,7 @@ download_panel() {
     RELEASE_INFO=$(curl -sL "$RELEASE_URL" 2>/dev/null || echo "")
 
     if [[ -z "$RELEASE_INFO" || "$RELEASE_INFO" == *"Not Found"* ]]; then
-        log_warn "Could not fetch panel release. Trying direct download..."
+        log_warn "Could not fetch panel release via API. Trying direct download..."
         DOWNLOAD_URL="https://github.com/${PANEL_REPO}/releases/latest/download/naivepanel-linux-${ARCH}"
     else
         DOWNLOAD_URL=$(echo "$RELEASE_INFO" | jq -r ".assets[] | select(.name | contains(\"naivepanel-linux-${ARCH}\")) | .browser_download_url" | head -1)
@@ -155,7 +155,24 @@ download_panel() {
         return 1
     fi
 
-    curl -#L "$DOWNLOAD_URL" -o "${INSTALL_DIR}/naivepanel"
+    log_info "Downloading from: ${DOWNLOAD_URL}"
+    # Use -f to fail on 404
+    if ! curl -#Lf "$DOWNLOAD_URL" -o "${INSTALL_DIR}/naivepanel"; then
+        log_error "Failed to download binary. Please check your repository releases."
+        return 1
+    fi
+
+    # Check if it's a valid ELF binary. Note: 'file' command might not be available on all systems,
+    # but we installed it in install_deps (actually it's not in there, let's add it).
+    if command -v file >/dev/null 2>&1; then
+        if ! file "${INSTALL_DIR}/naivepanel" | grep -q "ELF"; then
+            log_error "Downloaded file is not a valid Linux binary (Exec format error prevention)."
+            log_info "It might be an HTML error page or a Windows binary."
+            mv "${INSTALL_DIR}/naivepanel" "${INSTALL_DIR}/naivepanel.error"
+            return 1
+        fi
+    fi
+
     chmod +x "${INSTALL_DIR}/naivepanel"
     log_ok "NaivePanel downloaded to ${INSTALL_DIR}/naivepanel"
 }
