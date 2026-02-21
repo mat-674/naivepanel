@@ -3,7 +3,7 @@
 **NaivePanel** is a powerful, lightweight, and beautiful web management panel for NaiveProxy (Caddy with forwardproxy plugin). Inspired by the simplicity and functionality of 3x-ui, it provides a seamless interface to manage your proxy users, monitor traffic, and configure server settings with zero hassle.
 
 ## NaivePanel Dashboard
-## ![NaivePanel Dashboard](https://raw.githubusercontent.com/mat-674/naivepanel/main/assets/preview.png)
+![NaivePanel Dashboard](https://raw.githubusercontent.com/mat-674/naivepanel/main/assets/preview.png)
 
 ## 🚀 Features
 
