@@ -148,6 +148,60 @@ build_naive() {
     log_ok "NaiveProxy built and installed to ${INSTALL_DIR}/naive"
 }
 
+setup_wizard() {
+    echo ""
+    echo -e "${CYAN}╔══════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║          ${BOLD}Setup Wizard${NC}${CYAN}                    ║${NC}"
+    echo -e "${CYAN}╚══════════════════════════════════════════╝${NC}"
+    echo ""
+
+    # --- Domain ---
+    echo -e "${BOLD}1. Domain & TLS${NC}"
+    echo -e "${YELLOW}   A domain is required for valid SSL. Make sure DNS A record points here.${NC}"
+    echo -e "${YELLOW}   Leave empty to skip (self-signed TLS, may cause browser errors).${NC}"
+    echo ""
+    read -p "   Domain (e.g. proxy.example.com): " USER_DOMAIN
+    if [[ -n "$USER_DOMAIN" ]]; then
+        read -p "   Email for Let's Encrypt: " USER_TLS_EMAIL
+        log_ok "Domain: ${USER_DOMAIN}"
+    else
+        USER_TLS_EMAIL=""
+        log_warn "No domain. Self-signed TLS will be used."
+    fi
+    echo ""
+
+    # --- Admin ---
+    echo -e "${BOLD}2. Admin Account${NC}"
+    echo -e "${YELLOW}   Used to log into the panel. Leave empty to auto-generate.${NC}"
+    echo ""
+    read -p "   Admin username [auto]: " USER_ADMIN_USER
+    read -sp "   Admin password [auto]: " USER_ADMIN_PASS
+    echo ""
+    if [[ -n "$USER_ADMIN_USER" ]]; then
+        log_ok "Admin: ${USER_ADMIN_USER}"
+    else
+        log_info "Admin credentials will be auto-generated."
+    fi
+    echo ""
+
+    # --- Proxy User ---
+    echo -e "${BOLD}3. First Proxy User${NC}"
+    echo -e "${YELLOW}   NaiveProxy client credentials. Leave empty to auto-generate.${NC}"
+    echo ""
+    read -p "   Proxy username [auto]: " USER_PROXY_USER
+    read -sp "   Proxy password [auto]: " USER_PROXY_PASS
+    echo ""
+    if [[ -n "$USER_PROXY_USER" ]]; then
+        log_ok "Proxy user: ${USER_PROXY_USER}"
+    else
+        log_info "Proxy credentials will be auto-generated."
+    fi
+    echo ""
+
+    echo -e "${GREEN}${BOLD}Setup wizard complete. Building...${NC}"
+    echo ""
+}
+
 build_panel() {
     log_info "Building NaivePanel from source..."
 
@@ -173,11 +227,26 @@ build_panel() {
     rm -rf "$BUILD_DIR"
     log_ok "NaivePanel built and installed to ${INSTALL_DIR}/naivepanel"
 
-    # Setup database and capture credentials
+    # Setup database with wizard params
     log_info "Initializing database..."
-    SETUP_OUTPUT=$("${INSTALL_DIR}/naivepanel" --data-dir "${INSTALL_DIR}" --setup || true)
-    ADMIN_USER=$(echo "$SETUP_OUTPUT" | grep "Admin Username:" | awk '{print $4}')
-    ADMIN_PASS=$(echo "$SETUP_OUTPUT" | grep "Admin Password:" | awk '{print $4}')
+    local SETUP_ARGS="--data-dir ${INSTALL_DIR} --setup --create-user"
+    [[ -n "${USER_DOMAIN:-}" ]]      && SETUP_ARGS="${SETUP_ARGS} --domain ${USER_DOMAIN}"
+    [[ -n "${USER_TLS_EMAIL:-}" ]]   && SETUP_ARGS="${SETUP_ARGS} --tls-email ${USER_TLS_EMAIL}"
+    [[ -n "${USER_ADMIN_USER:-}" ]]  && SETUP_ARGS="${SETUP_ARGS} --admin-user ${USER_ADMIN_USER}"
+    [[ -n "${USER_ADMIN_PASS:-}" ]]  && SETUP_ARGS="${SETUP_ARGS} --admin-pass ${USER_ADMIN_PASS}"
+    [[ -n "${USER_PROXY_USER:-}" ]]  && SETUP_ARGS="${SETUP_ARGS} --proxy-user ${USER_PROXY_USER}"
+    [[ -n "${USER_PROXY_PASS:-}" ]]  && SETUP_ARGS="${SETUP_ARGS} --proxy-pass ${USER_PROXY_PASS}"
+
+    SETUP_OUTPUT=$("${INSTALL_DIR}/naivepanel" ${SETUP_ARGS} 2>&1 || true)
+
+    # Parse output
+    ADMIN_USER=$(echo "$SETUP_OUTPUT"  | grep "^Admin Username:" | awk -F': ' '{print $2}')
+    ADMIN_PASS=$(echo "$SETUP_OUTPUT"  | grep "^Admin Password:" | awk -F': ' '{print $2}')
+    PANEL_PORT=$(echo "$SETUP_OUTPUT"  | grep "^Panel Port:"     | awk -F': ' '{print $2}')
+    PROXY_USER=$(echo "$SETUP_OUTPUT"  | grep "^Proxy Username:" | awk -F': ' '{print $2}')
+    PROXY_PASS=$(echo "$SETUP_OUTPUT"  | grep "^Proxy Password:" | awk -F': ' '{print $2}')
+
+    log_ok "Database initialized"
 }
 
 create_service() {
@@ -220,27 +289,36 @@ start_service() {
 }
 
 show_credentials() {
+    local IP=$(curl -s4 ifconfig.me 2>/dev/null || echo "YOUR_SERVER_IP")
+
     echo ""
-    echo -e "${CYAN}╔══════════════════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║        ${BOLD}NaivePanel Installed Successfully!${NC}${CYAN}        ║${NC}"
-    echo -e "${CYAN}╠══════════════════════════════════════════════════╣${NC}"
+    echo -e "${CYAN}╔═══════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║      ${BOLD}  NaivePanel — Installation Complete!  ${NC}${CYAN}       ║${NC}"
+    echo -e "${CYAN}╠═══════════════════════════════════════════════════════╣${NC}"
+    echo -e "${CYAN}║${NC}"
+    echo -e "${CYAN}║${NC}  ${BOLD}📋 Admin Panel${NC}"
+    echo -e "${CYAN}║${NC}     URL:       ${GREEN}http://${IP}:${PANEL_PORT:-????}${NC}"
+    echo -e "${CYAN}║${NC}     Username:  ${GREEN}${ADMIN_USER:-N/A}${NC}"
+    echo -e "${CYAN}║${NC}     Password:  ${GREEN}${ADMIN_PASS:-N/A}${NC}"
+    echo -e "${CYAN}║${NC}"
+    echo -e "${CYAN}║${NC}  ${BOLD}🔑 Proxy User${NC}"
+    echo -e "${CYAN}║${NC}     Username:  ${GREEN}${PROXY_USER:-N/A}${NC}"
+    echo -e "${CYAN}║${NC}     Password:  ${GREEN}${PROXY_PASS:-N/A}${NC}"
 
-    # Read config to show port
-    if [[ -f "$CONFIG_FILE" ]]; then
-        local PORT=$(jq -r '.panel_port' "$CONFIG_FILE")
-        local IP=$(curl -s4 ifconfig.me 2>/dev/null || echo "YOUR_SERVER_IP")
-        echo -e "${CYAN}║${NC}  Panel URL: ${GREEN}http://${IP}:${PORT}${NC}"
-    fi
-
-    if [[ -n "${ADMIN_USER:-}" && -n "${ADMIN_PASS:-}" ]]; then
-        echo -e "${CYAN}║${NC}  Username:  ${GREEN}${ADMIN_USER}${NC}"
-        echo -e "${CYAN}║${NC}  Password:  ${GREEN}${ADMIN_PASS}${NC}"
+    if [[ -n "${USER_DOMAIN:-}" && -n "${PROXY_USER:-}" && -n "${PROXY_PASS:-}" ]]; then
+        local URI="naive+https://${PROXY_USER}:${PROXY_PASS}@${USER_DOMAIN}:443"
+        echo -e "${CYAN}║${NC}     URI:       ${GREEN}${URI}${NC}"
     fi
 
     echo -e "${CYAN}║${NC}"
-    echo -e "${CYAN}║${NC}  Check logs:  ${YELLOW}journalctl -u ${SERVICE_NAME} -f${NC}"
-    echo -e "${CYAN}║${NC}  ${RED}⚠  Save your admin credentials!${NC}"
-    echo -e "${CYAN}╚══════════════════════════════════════════════════╝${NC}"
+    if [[ -n "${USER_DOMAIN:-}" ]]; then
+        echo -e "${CYAN}║${NC}  ${BOLD}🌐 Domain:${NC}    ${GREEN}${USER_DOMAIN}${NC}"
+        echo -e "${CYAN}║${NC}"
+    fi
+    echo -e "${CYAN}║${NC}  ${YELLOW}Check logs:  journalctl -u ${SERVICE_NAME} -f${NC}"
+    echo -e "${CYAN}║${NC}  ${RED}⚠  SAVE YOUR CREDENTIALS NOW!${NC}"
+    echo -e "${CYAN}║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════════════════════╝${NC}"
     echo ""
 }
 
@@ -293,6 +371,7 @@ main() {
     mkdir -p "$INSTALL_DIR"
 
     install_deps
+    setup_wizard
     build_naive
     build_panel
     create_service

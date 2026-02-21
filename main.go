@@ -27,6 +27,13 @@ func main() {
 	dataDir := flag.String("data-dir", "", "Data directory")
 	port := flag.Int("port", 0, "Panel port (overrides config)")
 	setup := flag.Bool("setup", false, "Initialize database and print credentials, then exit")
+	domain := flag.String("domain", "", "Domain for NaiveProxy (e.g. proxy.example.com)")
+	tlsEmail := flag.String("tls-email", "", "Email for Let's Encrypt TLS certificate")
+	createUser := flag.Bool("create-user", false, "Create a proxy user during setup")
+	proxyUserFlag := flag.String("proxy-user", "", "Proxy user username (auto-generated if empty)")
+	proxyPassFlag := flag.String("proxy-pass", "", "Proxy user password (auto-generated if empty)")
+	adminUserFlag := flag.String("admin-user", "", "Admin username (auto-generated if empty)")
+	adminPassFlag := flag.String("admin-pass", "", "Admin password (auto-generated if empty)")
 	flag.Parse()
 
 	// Determine config path
@@ -66,23 +73,73 @@ func main() {
 
 	// Create admin if not exists
 	if _, err := db.GetAdmin(); err != nil {
-		adminUser := config.GenerateRandomUsername(8)
-		adminPass := config.GenerateRandomPassword(16)
+		adminUser := *adminUserFlag
+		adminPass := *adminPassFlag
+		if adminUser == "" {
+			adminUser = config.GenerateRandomUsername(8)
+		}
+		if adminPass == "" {
+			adminPass = config.GenerateRandomPassword(16)
+		}
 		hash, _ := auth.HashPassword(adminPass)
 		if err := db.CreateAdmin(adminUser, hash); err != nil {
 			log.Fatalf("Failed to create admin: %v", err)
 		}
-		fmt.Println("╔══════════════════════════════════════════╗")
-		fmt.Println("║        NaivePanel — Setup Complete       ║")
-		fmt.Println("╠══════════════════════════════════════════╣")
-		fmt.Printf("║  Admin Username: %-24s║\n", adminUser)
-		fmt.Printf("║  Admin Password: %-24s║\n", adminPass)
-		fmt.Printf("║  Panel Port:     %-24d║\n", cfg.PanelPort)
-		fmt.Println("╠══════════════════════════════════════════╣")
-		fmt.Println("║  ⚠  SAVE THESE CREDENTIALS NOW!  ⚠      ║")
-		fmt.Println("╚══════════════════════════════════════════╝")
+		fmt.Printf("Admin Username: %s\n", adminUser)
+		fmt.Printf("Admin Password: %s\n", adminPass)
+		fmt.Printf("Panel Port: %d\n", cfg.PanelPort)
 	} else if *setup {
 		fmt.Println("Admin already exists. Setup skipped.")
+	}
+
+	// Save domain/TLS settings if provided
+	if *domain != "" || *tlsEmail != "" {
+		settings := models.Settings{
+			Domain:   *domain,
+			Port:     443,
+			TLSEmail: *tlsEmail,
+		}
+		if err := db.SaveSettings(&settings); err != nil {
+			log.Printf("Failed to save settings: %v", err)
+		} else {
+			fmt.Printf("Domain: %s\n", *domain)
+			fmt.Printf("TLS Email: %s\n", *tlsEmail)
+		}
+	}
+
+	// Create a proxy user if requested
+	if *createUser {
+		proxyUser := *proxyUserFlag
+		proxyPass := *proxyPassFlag
+		if proxyUser == "" {
+			proxyUser = config.GenerateRandomUsername(8)
+		}
+		if proxyPass == "" {
+			proxyPass = config.GenerateRandomPassword(16)
+		}
+		if _, err := db.CreateUser(proxyUser, proxyPass, 0); err != nil {
+			log.Printf("Failed to create proxy user: %v", err)
+		} else {
+			fmt.Printf("Proxy Username: %s\n", proxyUser)
+			fmt.Printf("Proxy Password: %s\n", proxyPass)
+		}
+	}
+
+	// Generate initial Caddyfile if domain was provided during setup
+	if *setup && *domain != "" {
+		settings, _ := db.GetSettings()
+		users, _ := db.GetEnabledUsers()
+		if settings != nil {
+			content, err := naiveproxy.GenerateCaddyfile(settings, users)
+			if err == nil {
+				manager := naiveproxy.NewManager(cfg.NaiveBinary, cfg.CaddyfilePath)
+				if err := manager.WriteCaddyfile(content); err != nil {
+					log.Printf("Failed to write initial Caddyfile: %v", err)
+				} else {
+					fmt.Println("Initial Caddyfile generated.")
+				}
+			}
+		}
 	}
 
 	if *setup {
