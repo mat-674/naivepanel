@@ -46,13 +46,47 @@ function renderSettings() {
                     </div>
                 </div>
 
-                <div class="flex gap-4 mt-4">
-                    <button type="submit" class="btn btn-primary" id="save-settings-btn">Save & Apply</button>
+                <h3 class="mt-4 mb-4">Panel Maintenance</h3>
+                <div class="glass-panel" style="background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05);">
+                    <div class="flex justify-between align-center">
+                        <div>
+                            <h4 style="margin:0; font-weight: 500;">Update NaivePanel</h4>
+                            <p class="text-muted" style="margin: 0.25rem 0 0 0; font-size: 0.9rem;">Pull the latest version from GitHub and rebuild the panel. This will restart the service.</p>
+                        </div>
+                        <button type="button" class="btn btn-secondary" id="update-panel-btn" onclick="updatePanel()">Update Panel</button>
+                    </div>
+                </div>
+
+                <div class="flex gap-4 mt-4 py-4 mt-6 border-t border-dark">
+                    <button type="submit" class="btn btn-primary" id="save-settings-btn">Save & Apply Settings</button>
                     <button type="button" class="btn btn-secondary" onclick="initSettings()">Revert</button>
                 </div>
             </form>
         </div>
     `;
+}
+
+async function updatePanel() {
+    if (!confirm("Are you sure you want to update the panel? The service will restart and you may be disconnected briefly.")) return;
+
+    const btn = document.getElementById('update-panel-btn');
+    const originalText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Updating...';
+
+    try {
+        await API.serviceAction('update');
+        Toast.success('Update started! The panel will restart shortly.', 5000);
+
+        // Wait a bit, then try to reload to see if it's back up
+        setTimeout(() => {
+            window.location.reload();
+        }, 5000);
+    } catch (error) {
+        Toast.error('Failed to trigger update: ' + error.message);
+        btn.disabled = false;
+        btn.textContent = originalText;
+    }
 }
 
 async function initSettings() {

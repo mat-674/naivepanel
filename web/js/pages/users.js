@@ -67,6 +67,7 @@ async function loadUsers() {
                             <th>Username</th>
                             <th>Traffic Limit</th>
                             <th>HWID Limit</th>
+                            <th>Expires</th>
                             <th>Status</th>
                             <th>Actions</th>
                         </tr>
@@ -77,6 +78,7 @@ async function loadUsers() {
                                 <td style="font-weight:600;">${escapeHtml(u.username)}</td>
                                 <td>${u.traffic_limit > 0 ? formatBytes(u.traffic_limit) : '<span class="text-muted">∞</span>'}</td>
                                 <td>${u.hwid_limit > 0 ? u.hwid_limit + ' devices' : '<span class="text-muted">Unlimited</span>'}</td>
+                                <td>${u.expires_at ? new Date(u.expires_at).toLocaleString() : '<span class="text-muted">Never</span>'}</td>
                                 <td>
                                     ${u.enabled
                 ? '<span class="badge badge-success">Active</span>'
@@ -87,6 +89,7 @@ async function loadUsers() {
                                     <div class="flex gap-2">
                                         <button class="btn btn-secondary btn-sm" onclick="showSubToken('${escapeHtml(u.sub_token)}', '${escapeHtml(subPath)}', '${escapeHtml(host)}')" title="Subscription URL">Sub URL</button>
                                         <button class="btn btn-secondary btn-sm" onclick="showUserLink(${u.id})" title="Sing-Box URL">Manual</button>
+                                        <button class="btn btn-secondary btn-sm" onclick='showEditUserModal(${JSON.stringify(u).replace(/'/g, "&#39;")})' title="Edit User">Edit</button>
                                         <button class="btn btn-secondary btn-sm" onclick="resetUserHWID(${u.id})" title="Reset Device Limits">Reset HWIDs</button>
                                         <button class="btn btn-secondary btn-sm" onclick="toggleUserStatus(${u.id}, ${!u.enabled})">${u.enabled ? 'Disable' : 'Enable'}</button>
                                         <button class="btn btn-danger btn-sm" onclick="deleteUser(${u.id}, '${escapeHtml(u.username)}')">Delete</button>
@@ -146,6 +149,11 @@ function showCreateUserModal() {
                                 <input type="number" id="new-hwid-limit" placeholder="0 = unlimited" value="0" min="0">
                             </div>
                         </div>
+                        <div class="form-group mb-4 mt-2">
+                            <label>Expiration Date</label>
+                            <input type="datetime-local" id="new-expires-at">
+                            <small class="text-muted">Leave blank for no expiration.</small>
+                        </div>
                         <div class="modal-footer">
                             <button type="button" class="btn btn-secondary" onclick="closeUserModal()">Cancel</button>
                             <button type="submit" class="btn btn-primary" id="create-user-btn">Create User</button>
@@ -163,15 +171,118 @@ function showCreateUserModal() {
 
         const trafficGB = parseFloat(document.getElementById('new-traffic-limit').value) || 0;
         const hwidLimit = parseInt(document.getElementById('new-hwid-limit').value) || 0;
+        const expiresAtStr = document.getElementById('new-expires-at').value;
+
+        let payload = {
+            username: document.getElementById('new-username').value.trim(),
+            password: document.getElementById('new-password').value,
+            traffic_limit: Math.floor(trafficGB * 1024 * 1024 * 1024),
+            hwid_limit: hwidLimit,
+        };
+
+        if (expiresAtStr) {
+            payload.expires_at = Math.floor(new Date(expiresAtStr).getTime() / 1000);
+        } else {
+            // Send null or omitted to indicate no expiration
+            payload.expires_at = null;
+        }
 
         try {
-            await API.createUser({
-                username: document.getElementById('new-username').value.trim(),
-                password: document.getElementById('new-password').value,
-                traffic_limit: Math.floor(trafficGB * 1024 * 1024 * 1024),
-                hwid_limit: hwidLimit,
-            });
+            await API.createUser(payload);
             Toast.success('User created successfully');
+            closeUserModal();
+            await loadUsers();
+        } catch (error) {
+            Toast.error(error.message);
+            btn.disabled = false;
+        }
+    });
+}
+
+function showEditUserModal(user) {
+    const container = document.getElementById('user-modal-container');
+    if (!container) return;
+
+    const trafficGB = user.traffic_limit ? (user.traffic_limit / (1024 * 1024 * 1024)).toFixed(2) : 0;
+
+    // Format date for datetime-local "YYYY-MM-DDThh:mm"
+    let tzoffset = (new Date()).getTimezoneOffset() * 60000; // offset in milliseconds
+    let localISOTime = '';
+    if (user.expires_at) {
+        localISOTime = (new Date(new Date(user.expires_at) - tzoffset)).toISOString().slice(0, 16);
+    }
+
+    container.innerHTML = `
+        <div class="modal-overlay active" onclick="closeUserModal(event)">
+            <div class="modal" onclick="event.stopPropagation()">
+                <div class="modal-header">
+                    <h3>Edit User: ${escapeHtml(user.username)}</h3>
+                    <button class="close-btn" onclick="closeUserModal()">×</button>
+                </div>
+                <div class="modal-body">
+                    <form id="edit-user-form">
+                        <div class="form-group">
+                            <label>Username</label>
+                            <input type="text" value="${escapeHtml(user.username)}" disabled class="bg-dark text-muted cursor-not-allowed">
+                            <small class="text-muted">Username cannot be changed as it is used for proxy authentication.</small>
+                        </div>
+                        <div class="form-group">
+                            <label>New Password</label>
+                            <input type="text" id="edit-password" placeholder="Leave blank to keep current password">
+                        </div>
+                        <div class="grid grid-cols-2">
+                            <div class="form-group">
+                                <label>Traffic Limit (GB)</label>
+                                <input type="number" id="edit-traffic-limit" placeholder="0 = unlimited" value="${trafficGB}" min="0" step="0.01">
+                            </div>
+                            <div class="form-group">
+                                <label>HWID Devices Limit</label>
+                                <input type="number" id="edit-hwid-limit" placeholder="0 = unlimited" value="${user.hwid_limit}" min="0">
+                            </div>
+                        </div>
+                        <div class="form-group mb-4 mt-2">
+                            <label>Expiration Date</label>
+                            <input type="datetime-local" id="edit-expires-at" value="${localISOTime}">
+                            <small class="text-muted">Clear to remove expiration.</small>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary" onclick="closeUserModal()">Cancel</button>
+                            <button type="submit" class="btn btn-primary" id="edit-user-btn">Save Changes</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    `;
+
+    document.getElementById('edit-user-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const btn = document.getElementById('edit-user-btn');
+        btn.disabled = true;
+
+        const tf = parseFloat(document.getElementById('edit-traffic-limit').value) || 0;
+        const hwidLimit = parseInt(document.getElementById('edit-hwid-limit').value) || 0;
+        const newPassword = document.getElementById('edit-password').value;
+        const expiresAtStr = document.getElementById('edit-expires-at').value;
+
+        const updateData = {
+            traffic_limit: Math.floor(tf * 1024 * 1024 * 1024),
+            hwid_limit: hwidLimit,
+        };
+
+        if (expiresAtStr) {
+            updateData.expires_at = Math.floor(new Date(expiresAtStr).getTime() / 1000);
+        } else {
+            updateData.expires_at = null; // Backend expects pointer to *int64 or omitted. nil pointer updates to null in Go.
+        }
+
+        if (newPassword.trim() !== '') {
+            updateData.password = newPassword;
+        }
+
+        try {
+            await API.updateUser(user.id, updateData);
+            Toast.success('User updated successfully');
             closeUserModal();
             await loadUsers();
         } catch (error) {

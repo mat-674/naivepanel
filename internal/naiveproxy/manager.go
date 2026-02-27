@@ -176,6 +176,30 @@ func (m *Manager) WriteCaddyfile(content string) error {
 	return os.WriteFile(m.caddyfile, []byte(content), 0644)
 }
 
+// UpdatePanel triggers the installation script to update the panel
+func (m *Manager) UpdatePanel() error {
+	// Execute the update script in the background
+	scriptPath := "/opt/naivepanel/scripts/install.sh"
+	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
+		return fmt.Errorf("update script not found at %s", scriptPath)
+	}
+
+	cmd := exec.Command("bash", scriptPath, "--update")
+	
+	// Start the command asynchronously
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start update script: %w", err)
+	}
+
+	// We don't wait for completion because the script will restart this process.
+	// But we try to release resources.
+	go func() {
+		cmd.Wait()
+	}()
+
+	return nil
+}
+
 // GetSystemInfo returns basic system information
 func GetSystemInfo() (string, string) {
 	return runtime.GOOS, runtime.GOARCH

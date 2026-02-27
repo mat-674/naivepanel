@@ -65,8 +65,10 @@ func (h *StatusHandler) ServiceAction(w http.ResponseWriter, r *http.Request) {
 		err = h.Manager.Stop()
 	case "restart":
 		err = h.Manager.Restart()
+	case "update":
+		err = h.Manager.UpdatePanel()
 	default:
-		jsonError(w, "invalid action, use: start, stop, restart", http.StatusBadRequest)
+		jsonError(w, "invalid action, use: start, stop, restart, update", http.StatusBadRequest)
 		return
 	}
 
