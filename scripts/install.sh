@@ -352,15 +352,68 @@ uninstall() {
     exit 0
 }
 
+update_panel() {
+    log_info "Updating NaivePanel..."
+
+    if [[ ! -f "${INSTALL_DIR}/naivepanel" ]]; then
+        log_error "NaivePanel is not installed at ${INSTALL_DIR}. Use the installer first."
+        exit 1
+    fi
+
+    check_root
+    detect_os
+    detect_arch
+    install_deps
+
+    # Build the panel (this will clone latest and overwrite the binary)
+    # We set dummy wizard vars so build_panel doesn't fail if it ever relies on them for setup
+    USER_DOMAIN=""
+    USER_TLS_EMAIL=""
+    USER_ADMIN_USER=""
+    USER_ADMIN_PASS=""
+    USER_PROXY_USER=""
+    USER_PROXY_PASS=""
+    
+    # Stop service before replacing binary
+    if systemctl is-active --quiet ${SERVICE_NAME} 2>/dev/null; then
+        log_info "Stopping service for update..."
+        systemctl stop ${SERVICE_NAME}
+    fi
+
+    # build_panel clones to /tmp, builds, and moves to INSTALL_DIR
+    # It also runs --setup, but we want to avoid resetting the DB if possible.
+    # Actually build_panel calls setup_wizard if we are not careful.
+    # Wait, build_panel in install.sh:205 doesn't call setup_wizard, it is called in main.
+    
+    log_info "Building latest NaivePanel..."
+    local BUILD_DIR="/tmp/naivepanel_build"
+    rm -rf "$BUILD_DIR"
+    git clone "https://github.com/${PANEL_REPO}.git" "$BUILD_DIR" --quiet
+    cd "$BUILD_DIR"
+    go build -ldflags="-s -w" -o "${INSTALL_DIR}/naivepanel" main.go
+    chmod +x "${INSTALL_DIR}/naivepanel"
+    cd - > /dev/null
+    rm -rf "$BUILD_DIR"
+
+    log_ok "Binary updated"
+
+    # Restart service
+    start_service
+    log_ok "NaivePanel updated successfully!"
+    exit 0
+}
+
 # --- Main ---
 
 main() {
     print_banner
 
-    # Check for uninstall flag
+    # Check for flags
     if [[ "${1:-}" == "--uninstall" ]]; then
         check_root
         uninstall
+    elif [[ "${1:-}" == "--update" ]]; then
+        update_panel
     fi
 
     check_root

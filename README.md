@@ -69,6 +69,14 @@ The installer will:
 7. Register and start a systemd service.
 8. Print the panel URL, admin credentials, and proxy connection URI.
 
+### Update
+
+To update NaivePanel to the latest version (rebuilds binary, keeps config):
+
+```bash
+bash <(curl -sL https://raw.githubusercontent.com/mat-674/naivepanel/main/scripts/install.sh) --update
+```
+
 ### Uninstall
 
 ```bash
