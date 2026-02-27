@@ -102,6 +102,12 @@ const API = {
         });
     },
 
+    async resetHWID(id) {
+        return this.request(`/api/users/${id}/hwid/reset`, {
+            method: 'POST',
+        });
+    },
+
     async getUserLink(id) {
         return this.request(`/api/users/${id}/link`);
     },

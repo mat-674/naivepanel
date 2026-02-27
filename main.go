@@ -117,7 +117,7 @@ func main() {
 		if proxyPass == "" {
 			proxyPass = config.GenerateRandomPassword(16)
 		}
-		if _, err := db.CreateUser(proxyUser, proxyPass, 0); err != nil {
+		if _, err := db.CreateUser(models.CreateUserRequest{Username: proxyUser, Password: proxyPass}); err != nil {
 			log.Printf("Failed to create proxy user: %v", err)
 		} else {
 			fmt.Printf("Proxy Username: %s\n", proxyUser)
@@ -165,6 +165,7 @@ func main() {
 	userHandler := &handlers.UserHandler{DB: db, Manager: manager}
 	settingsHandler := &handlers.SettingsHandler{DB: db, Manager: manager}
 	statusHandler := &handlers.StatusHandler{DB: db, Manager: manager}
+	subHandler := &handlers.SubHandler{DB: db}
 
 	// Setup routes
 	mux := http.NewServeMux()
@@ -182,7 +183,24 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to get web filesystem: %v", err)
 	}
-	mux.Handle("/", http.FileServer(http.FS(webContent)))
+	fileServer := http.FileServer(http.FS(webContent))
+
+	// Dynamic interceptor for root
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		settings, err := db.GetSettings()
+		subPathPrefix := "/sub/" // fallback default
+		if err == nil && settings != nil && settings.SubPath != "" {
+			subPathPrefix = "/" + settings.SubPath + "/"
+		}
+
+		if strings.HasPrefix(r.URL.Path, subPathPrefix) {
+			subHandler.ServeHTTP(w, r)
+			return
+		}
+		
+		// Fallback to static files
+		fileServer.ServeHTTP(w, r)
+	})
 
 	// Apply CORS middleware
 	handler := handlers.CORSMiddleware(mux)

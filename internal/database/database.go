@@ -1,7 +1,9 @@
 package database
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"naivepanel/internal/models"
 	"time"
@@ -52,6 +54,13 @@ func (db *DB) migrate() error {
 			enabled INTEGER DEFAULT 1,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
+		`CREATE TABLE IF NOT EXISTS user_hwids (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER NOT NULL,
+			hwid TEXT NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(user_id, hwid)
+		)`,
 		`CREATE TABLE IF NOT EXISTS settings (
 			key TEXT PRIMARY KEY,
 			value TEXT NOT NULL
@@ -63,6 +72,13 @@ func (db *DB) migrate() error {
 			return fmt.Errorf("migration failed: %w", err)
 		}
 	}
+
+	// Add new columns to existing proxy_users table (ignoring errors if they already exist)
+	db.conn.Exec("ALTER TABLE proxy_users ADD COLUMN hwid_limit INTEGER DEFAULT 0")
+	db.conn.Exec("ALTER TABLE proxy_users ADD COLUMN sub_token TEXT DEFAULT ''")
+	db.conn.Exec("ALTER TABLE proxy_users ADD COLUMN expires_at DATETIME")
+	db.conn.Exec("ALTER TABLE proxy_users ADD COLUMN hwid_reset_interval INTEGER DEFAULT 0")
+	db.conn.Exec("ALTER TABLE proxy_users ADD COLUMN last_hwid_reset DATETIME")
 
 	return nil
 }
@@ -106,7 +122,7 @@ func (db *DB) UpdateAdminUsername(username string) error {
 // ListUsers returns all proxy users
 func (db *DB) ListUsers() ([]models.ProxyUser, error) {
 	rows, err := db.conn.Query(
-		"SELECT id, username, password, traffic_up, traffic_down, traffic_limit, enabled, created_at FROM proxy_users ORDER BY id",
+		"SELECT id, username, password, traffic_up, traffic_down, traffic_limit, hwid_limit, sub_token, expires_at, hwid_reset_interval, last_hwid_reset, enabled, created_at FROM proxy_users ORDER BY id",
 	)
 	if err != nil {
 		return nil, err
@@ -117,7 +133,7 @@ func (db *DB) ListUsers() ([]models.ProxyUser, error) {
 	for rows.Next() {
 		var u models.ProxyUser
 		var enabled int
-		if err := rows.Scan(&u.ID, &u.Username, &u.Password, &u.TrafficUp, &u.TrafficDown, &u.TrafficLimit, &enabled, &u.CreatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Username, &u.Password, &u.TrafficUp, &u.TrafficDown, &u.TrafficLimit, &u.HWIDLimit, &u.SubToken, &u.ExpiresAt, &u.HWIDResetInterval, &u.LastHWIDReset, &enabled, &u.CreatedAt); err != nil {
 			return nil, err
 		}
 		u.Enabled = enabled == 1
@@ -132,8 +148,8 @@ func (db *DB) GetUser(id int64) (*models.ProxyUser, error) {
 	var u models.ProxyUser
 	var enabled int
 	err := db.conn.QueryRow(
-		"SELECT id, username, password, traffic_up, traffic_down, traffic_limit, enabled, created_at FROM proxy_users WHERE id = ?", id,
-	).Scan(&u.ID, &u.Username, &u.Password, &u.TrafficUp, &u.TrafficDown, &u.TrafficLimit, &enabled, &u.CreatedAt)
+		"SELECT id, username, password, traffic_up, traffic_down, traffic_limit, hwid_limit, sub_token, expires_at, hwid_reset_interval, last_hwid_reset, enabled, created_at FROM proxy_users WHERE id = ?", id,
+	).Scan(&u.ID, &u.Username, &u.Password, &u.TrafficUp, &u.TrafficDown, &u.TrafficLimit, &u.HWIDLimit, &u.SubToken, &u.ExpiresAt, &u.HWIDResetInterval, &u.LastHWIDReset, &enabled, &u.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -142,10 +158,20 @@ func (db *DB) GetUser(id int64) (*models.ProxyUser, error) {
 }
 
 // CreateUser creates a new proxy user
-func (db *DB) CreateUser(username, password string, trafficLimit int64) (*models.ProxyUser, error) {
+func (db *DB) CreateUser(req models.CreateUserRequest) (*models.ProxyUser, error) {
+	b := make([]byte, 16)
+	rand.Read(b)
+	subToken := hex.EncodeToString(b)
+
+	var expiresAt *time.Time
+	if req.ExpiresAt != nil && *req.ExpiresAt > 0 {
+		tm := time.Unix(*req.ExpiresAt, 0)
+		expiresAt = &tm
+	}
+
 	result, err := db.conn.Exec(
-		"INSERT INTO proxy_users (username, password, traffic_limit) VALUES (?, ?, ?)",
-		username, password, trafficLimit,
+		"INSERT INTO proxy_users (username, password, traffic_limit, hwid_limit, sub_token, expires_at, hwid_reset_interval) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		req.Username, req.Password, req.TrafficLimit, req.HWIDLimit, subToken, expiresAt, req.HWIDResetInterval,
 	)
 	if err != nil {
 		return nil, err
@@ -153,12 +179,16 @@ func (db *DB) CreateUser(username, password string, trafficLimit int64) (*models
 
 	id, _ := result.LastInsertId()
 	return &models.ProxyUser{
-		ID:           id,
-		Username:     username,
-		Password:     password,
-		TrafficLimit: trafficLimit,
-		Enabled:      true,
-		CreatedAt:    time.Now(),
+		ID:                id,
+		Username:          req.Username,
+		Password:          req.Password,
+		TrafficLimit:      req.TrafficLimit,
+		HWIDLimit:         req.HWIDLimit,
+		SubToken:          subToken,
+		ExpiresAt:         expiresAt,
+		HWIDResetInterval: req.HWIDResetInterval,
+		Enabled:           true,
+		CreatedAt:         time.Now(),
 	}, nil
 }
 
@@ -171,6 +201,26 @@ func (db *DB) UpdateUser(id int64, req models.UpdateUserRequest) error {
 	}
 	if req.TrafficLimit != nil {
 		if _, err := db.conn.Exec("UPDATE proxy_users SET traffic_limit = ? WHERE id = ?", *req.TrafficLimit, id); err != nil {
+			return err
+		}
+	}
+	if req.HWIDLimit != nil {
+		if _, err := db.conn.Exec("UPDATE proxy_users SET hwid_limit = ? WHERE id = ?", *req.HWIDLimit, id); err != nil {
+			return err
+		}
+	}
+	if req.ExpiresAt != nil {
+		var t *time.Time
+		if *req.ExpiresAt > 0 {
+			tm := time.Unix(*req.ExpiresAt, 0)
+			t = &tm
+		}
+		if _, err := db.conn.Exec("UPDATE proxy_users SET expires_at = ? WHERE id = ?", t, id); err != nil {
+			return err
+		}
+	}
+	if req.HWIDResetInterval != nil {
+		if _, err := db.conn.Exec("UPDATE proxy_users SET hwid_reset_interval = ? WHERE id = ?", *req.HWIDResetInterval, id); err != nil {
 			return err
 		}
 	}
@@ -195,7 +245,7 @@ func (db *DB) DeleteUser(id int64) error {
 // GetEnabledUsers returns only enabled proxy users
 func (db *DB) GetEnabledUsers() ([]models.ProxyUser, error) {
 	rows, err := db.conn.Query(
-		"SELECT id, username, password, traffic_up, traffic_down, traffic_limit, enabled, created_at FROM proxy_users WHERE enabled = 1 ORDER BY id",
+		"SELECT id, username, password, traffic_up, traffic_down, traffic_limit, hwid_limit, sub_token, expires_at, hwid_reset_interval, last_hwid_reset, enabled, created_at FROM proxy_users WHERE enabled = 1 ORDER BY id",
 	)
 	if err != nil {
 		return nil, err
@@ -206,7 +256,7 @@ func (db *DB) GetEnabledUsers() ([]models.ProxyUser, error) {
 	for rows.Next() {
 		var u models.ProxyUser
 		var enabled int
-		if err := rows.Scan(&u.ID, &u.Username, &u.Password, &u.TrafficUp, &u.TrafficDown, &u.TrafficLimit, &enabled, &u.CreatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Username, &u.Password, &u.TrafficUp, &u.TrafficDown, &u.TrafficLimit, &u.HWIDLimit, &u.SubToken, &u.ExpiresAt, &u.HWIDResetInterval, &u.LastHWIDReset, &enabled, &u.CreatedAt); err != nil {
 			return nil, err
 		}
 		u.Enabled = true
@@ -274,11 +324,17 @@ func (db *DB) GetSettings() (*models.Settings, error) {
 		fmt.Sscanf(v, "%d", &port)
 	}
 
+	subPath := all["sub_path"]
+	if subPath == "" {
+		subPath = "sub" // default Custom Sub URL Prefix
+	}
+
 	return &models.Settings{
 		Domain:    all["domain"],
 		Port:      port,
 		TLSEmail:  all["tls_email"],
 		DecoySite: all["decoy_site"],
+		SubPath:   subPath,
 	}, nil
 }
 
@@ -289,6 +345,7 @@ func (db *DB) SaveSettings(s *models.Settings) error {
 		"port":       fmt.Sprintf("%d", s.Port),
 		"tls_email":  s.TLSEmail,
 		"decoy_site": s.DecoySite,
+		"sub_path":   s.SubPath,
 	}
 
 	for key, value := range pairs {
@@ -297,4 +354,57 @@ func (db *DB) SaveSettings(s *models.Settings) error {
 		}
 	}
 	return nil
+}
+
+// --- Subscriptions & HWID ---
+
+// GetUserBySubToken retrieves a user by their sub_token
+func (db *DB) GetUserBySubToken(token string) (*models.ProxyUser, error) {
+	var u models.ProxyUser
+	var enabled int
+	err := db.conn.QueryRow(
+		"SELECT id, username, password, traffic_up, traffic_down, traffic_limit, hwid_limit, sub_token, expires_at, hwid_reset_interval, last_hwid_reset, enabled, created_at FROM proxy_users WHERE sub_token = ?", token,
+	).Scan(&u.ID, &u.Username, &u.Password, &u.TrafficUp, &u.TrafficDown, &u.TrafficLimit, &u.HWIDLimit, &u.SubToken, &u.ExpiresAt, &u.HWIDResetInterval, &u.LastHWIDReset, &enabled, &u.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	u.Enabled = enabled == 1
+	return &u, nil
+}
+
+// GetHWIDs retrieves all recorded HWIDs for a user
+func (db *DB) GetHWIDs(userID int64) ([]models.UserHWID, error) {
+	rows, err := db.conn.Query("SELECT id, user_id, hwid, created_at FROM user_hwids WHERE user_id = ?", userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var hwids []models.UserHWID
+	for rows.Next() {
+		var h models.UserHWID
+		if err := rows.Scan(&h.ID, &h.UserID, &h.HWID, &h.CreatedAt); err != nil {
+			return nil, err
+		}
+		hwids = append(hwids, h)
+	}
+	return hwids, nil
+}
+
+// RegisterHWID records a new HWID for a user
+func (db *DB) RegisterHWID(userID int64, hwid string) error {
+	_, err := db.conn.Exec("INSERT OR IGNORE INTO user_hwids (user_id, hwid) VALUES (?, ?)", userID, hwid)
+	return err
+}
+
+// ResetHWIDs clears all HWIDs for a user
+func (db *DB) ResetHWIDs(userID int64) error {
+	_, err := db.conn.Exec("DELETE FROM user_hwids WHERE user_id = ?", userID)
+	return err
+}
+
+// UpdateHWIDResetTime updates the last_hwid_reset field for a user to now
+func (db *DB) UpdateHWIDResetTime(userID int64) error {
+	_, err := db.conn.Exec("UPDATE proxy_users SET last_hwid_reset = ? WHERE id = ?", time.Now(), userID)
+	return err
 }

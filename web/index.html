@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NaivePanel</title>
+    <title>NaivePanel - Dynamic Subs</title>
     <meta name="description" content="NaiveProxy Management Panel">
     <link rel="stylesheet" href="/css/style.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -11,7 +11,17 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
-    <div id="app"></div>
+    <nav class="navbar" id="main-nav" style="display: none;">
+        <div class="nav-brand">NaivePanel</div>
+        <div class="nav-links">
+            <a href="#/" class="nav-link" id="nav-dashboard">Dashboard</a>
+            <a href="#/users" class="nav-link" id="nav-users">Users</a>
+            <a href="#/settings" class="nav-link" id="nav-settings">Settings</a>
+            <a href="#" class="nav-link" onclick="API.logout(); return false;">Logout</a>
+        </div>
+    </nav>
+    
+    <div class="container" id="app"></div>
 
     <div id="toast-container"></div>
 

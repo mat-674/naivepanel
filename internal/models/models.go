@@ -12,14 +12,57 @@ type Admin struct {
 
 // ProxyUser represents a NaiveProxy client user
 type ProxyUser struct {
-	ID           int64     `json:"id"`
-	Username     string    `json:"username"`
-	Password     string    `json:"password"`
-	TrafficUp    int64     `json:"traffic_up"`
-	TrafficDown  int64     `json:"traffic_down"`
-	TrafficLimit int64     `json:"traffic_limit"` // 0 = unlimited, in bytes
-	Enabled      bool      `json:"enabled"`
-	CreatedAt    time.Time `json:"created_at"`
+	ID                int64      `json:"id"`
+	Username          string     `json:"username"`
+	Password          string     `json:"password"`
+	TrafficUp         int64      `json:"traffic_up"`
+	TrafficDown       int64      `json:"traffic_down"`
+	TrafficLimit      int64      `json:"traffic_limit"` // 0 = unlimited, in bytes
+	HWIDLimit         int        `json:"hwid_limit"`    // 0 = unlimited devices
+	SubToken          string     `json:"sub_token"`
+	ExpiresAt         *time.Time `json:"expires_at"`
+	HWIDResetInterval int        `json:"hwid_reset_interval"` // in days
+	LastHWIDReset     *time.Time `json:"last_hwid_reset"`
+	Enabled           bool       `json:"enabled"`
+	CreatedAt         time.Time  `json:"created_at"`
+}
+
+// UserHWID represents a recorded hardware ID for a user
+type UserHWID struct {
+	ID        int64     `json:"id"`
+	UserID    int64     `json:"user_id"`
+	HWID      string    `json:"hwid"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// SubscriptionData is the response format for the NaiveUI client
+type SubscriptionData struct {
+	Version  int                   `json:"version"`
+	Info     *SubscriptionInfo     `json:"info,omitempty"`
+	Profiles []SubscriptionProfile `json:"profiles"`
+}
+
+// SubscriptionInfo contains user limits for NaiveUI
+type SubscriptionInfo struct {
+	UserTag           string `json:"user_tag"`
+	ExpiresAt         int64  `json:"expires_at"`
+	TrafficLimitBytes int64  `json:"traffic_limit_bytes"`
+	TrafficUsedBytes  int64  `json:"traffic_used_bytes"`
+	Message           string `json:"message"`
+}
+
+// SubscriptionProfile contains server connection details
+type SubscriptionProfile struct {
+	Name           string `json:"name"`
+	Server         string `json:"server"`
+	Port           int    `json:"port"`
+	Username       string `json:"username"`
+	Password       string `json:"password"`
+	Protocol       string `json:"protocol"`
+	ListenProtocol string `json:"listen_protocol,omitempty"`
+	ListenPort     int    `json:"listen_port,omitempty"`
+	Concurrency    int    `json:"concurrency,omitempty"`
+	ExtraHeaders   string `json:"extra_headers,omitempty"`
 }
 
 // Settings represents server configuration
@@ -28,6 +71,7 @@ type Settings struct {
 	Port      int    `json:"port"`
 	TLSEmail  string `json:"tls_email"`
 	DecoySite string `json:"decoy_site"`
+	SubPath   string `json:"sub_path"`
 }
 
 // ServerStatus represents the current state of NaiveProxy
@@ -60,16 +104,22 @@ type LoginResponse struct {
 
 // CreateUserRequest is the create user API body
 type CreateUserRequest struct {
-	Username     string `json:"username"`
-	Password     string `json:"password"`
-	TrafficLimit int64  `json:"traffic_limit"`
+	Username          string `json:"username"`
+	Password          string `json:"password"`
+	TrafficLimit      int64  `json:"traffic_limit"`
+	HWIDLimit         int    `json:"hwid_limit"`
+	ExpiresAt         *int64 `json:"expires_at"`          // unix timestamp
+	HWIDResetInterval int    `json:"hwid_reset_interval"` // in days
 }
 
 // UpdateUserRequest is the update user API body
 type UpdateUserRequest struct {
-	Password     *string `json:"password,omitempty"`
-	TrafficLimit *int64  `json:"traffic_limit,omitempty"`
-	Enabled      *bool   `json:"enabled,omitempty"`
+	Password          *string `json:"password,omitempty"`
+	TrafficLimit      *int64  `json:"traffic_limit,omitempty"`
+	HWIDLimit         *int    `json:"hwid_limit,omitempty"`
+	ExpiresAt         *int64  `json:"expires_at,omitempty"`
+	HWIDResetInterval *int    `json:"hwid_reset_interval,omitempty"`
+	Enabled           *bool   `json:"enabled,omitempty"`
 }
 
 // UserLink contains connection info for a proxy user

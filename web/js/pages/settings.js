@@ -6,57 +6,49 @@ function renderSettings() {
     return `
         <div class="page-header">
             <h2>Settings</h2>
-            <p>Configure NaiveProxy server and panel</p>
+            <p class="text-muted">Configure NaiveProxy server, panel, and subscription routing.</p>
         </div>
-        <div class="page-body">
+        <div class="glass-panel mt-4">
             <form id="settings-form">
-                <div class="settings-section">
-                    <h3>Server Configuration</h3>
-                    <div class="settings-grid">
-                        <div class="form-group">
-                            <label class="form-label" for="setting-domain">Domain</label>
-                            <input type="text" class="form-input" id="setting-domain" placeholder="example.com">
-                            <div class="form-hint">Your server's domain name</div>
-                        </div>
-                        <div class="form-group">
-                            <label class="form-label" for="setting-port">Listen Port</label>
-                            <input type="number" class="form-input" id="setting-port" placeholder="443" value="443" min="1" max="65535">
-                            <div class="form-hint">Port NaiveProxy listens on (default: 443)</div>
-                        </div>
+                
+                <h3 class="mb-4">Server Configuration</h3>
+                <div class="grid grid-cols-2 mb-4">
+                    <div class="form-group">
+                        <label for="setting-domain">Domain Name</label>
+                        <input type="text" id="setting-domain" placeholder="proxy.example.com">
+                    </div>
+                    <div class="form-group">
+                        <label for="setting-port">Listen Port</label>
+                        <input type="number" id="setting-port" placeholder="443" value="443" min="1" max="65535">
                     </div>
                 </div>
 
-                <div class="settings-section">
-                    <h3>TLS / ACME (Let's Encrypt)</h3>
-                    <div class="settings-grid">
-                        <div class="form-group full">
-                            <label class="form-label" for="setting-tls-email">ACME Email</label>
-                            <input type="email" class="form-input" id="setting-tls-email" placeholder="admin@example.com">
-                            <div class="form-hint">Email for Let's Encrypt certificate registration. Leave empty for self-signed.</div>
-                        </div>
+                <h3 class="mt-4 mb-4">Routing & ACME</h3>
+                <div class="grid grid-cols-2 mb-4">
+                    <div class="form-group">
+                        <label for="setting-subpath">Subscription Path</label>
+                        <input type="text" id="setting-subpath" placeholder="sub">
+                        <small class="text-muted">Users fetch subs at: <b>https://domain.com/&lt;path&gt;/token</b></small>
+                    </div>
+                    <div class="form-group">
+                        <label for="setting-tls-email">Let's Encrypt Email</label>
+                        <input type="email" id="setting-tls-email" placeholder="admin@example.com">
+                        <small class="text-muted">Optional. Leave blank for self-signed certs.</small>
+                    </div>
+                </div>
+                
+                <h3 class="mt-4 mb-4">Camouflage</h3>
+                <div class="grid grid-cols-1 mb-4">
+                    <div class="form-group">
+                        <label for="setting-decoy">Decoy Site URL</label>
+                        <input type="url" id="setting-decoy" placeholder="https://www.example.com">
+                        <small class="text-muted">Requests that don't match NaiveProxy are forwarded here.</small>
                     </div>
                 </div>
 
-                <div class="settings-section">
-                    <h3>Decoy Site (Camouflage)</h3>
-                    <div class="settings-grid">
-                        <div class="form-group full">
-                            <label class="form-label" for="setting-decoy">Decoy Site URL</label>
-                            <input type="text" class="form-input" id="setting-decoy" placeholder="https://www.example.com">
-                            <div class="form-hint">Website to display when probed. Requests that don't look like proxy traffic will be forwarded here.</div>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="btn-group">
-                    <button type="submit" class="btn btn-primary" id="save-settings-btn">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
-                        Save & Apply
-                    </button>
-                    <button type="button" class="btn btn-outline" onclick="initSettings()">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 4v6h6M23 20v-6h-6"/><path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15"/></svg>
-                        Reset
-                    </button>
+                <div class="flex gap-4 mt-4">
+                    <button type="submit" class="btn btn-primary" id="save-settings-btn">Save & Apply</button>
+                    <button type="button" class="btn btn-secondary" onclick="initSettings()">Revert</button>
                 </div>
             </form>
         </div>
@@ -68,15 +60,11 @@ async function initSettings() {
         const res = await API.getSettings();
         const settings = res.data;
 
-        const domainInput = document.getElementById('setting-domain');
-        const portInput = document.getElementById('setting-port');
-        const emailInput = document.getElementById('setting-tls-email');
-        const decoyInput = document.getElementById('setting-decoy');
-
-        if (domainInput) domainInput.value = settings.domain || '';
-        if (portInput) portInput.value = settings.port || 443;
-        if (emailInput) emailInput.value = settings.tls_email || '';
-        if (decoyInput) decoyInput.value = settings.decoy_site || '';
+        document.getElementById('setting-domain').value = settings.domain || '';
+        document.getElementById('setting-port').value = settings.port || 443;
+        document.getElementById('setting-tls-email').value = settings.tls_email || '';
+        document.getElementById('setting-decoy').value = settings.decoy_site || '';
+        document.getElementById('setting-subpath').value = settings.sub_path || 'sub';
 
     } catch (error) {
         Toast.error('Failed to load settings: ' + error.message);
@@ -94,16 +82,20 @@ async function initSettings() {
             btn.disabled = true;
 
             try {
+                let subPath = document.getElementById('setting-subpath').value.trim();
+                subPath = subPath.replace(/^\/+|\/+$/g, ''); // Strip leading/trailing slashes
+
                 await API.updateSettings({
                     domain: document.getElementById('setting-domain').value.trim(),
                     port: parseInt(document.getElementById('setting-port').value) || 443,
                     tls_email: document.getElementById('setting-tls-email').value.trim(),
                     decoy_site: document.getElementById('setting-decoy').value.trim(),
+                    sub_path: subPath || 'sub',
                 });
 
-                Toast.success('Settings saved! Caddyfile regenerated.');
+                Toast.success('Settings saved cleanly! Routing updated.');
             } catch (error) {
-                Toast.error(error.message);
+                Toast.error('Error: ' + error.message);
             } finally {
                 btn.disabled = false;
             }

@@ -52,6 +52,14 @@ func (h *UserHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.GetLink(w, r, id)
+	case strings.HasSuffix(path, "/hwid/reset") && r.Method == http.MethodPost:
+		idStr := strings.TrimSuffix(path, "/hwid/reset")
+		id, err := parseID(idStr)
+		if err != nil {
+			jsonError(w, "invalid user id", http.StatusBadRequest)
+			return
+		}
+		h.ResetHWID(w, r, id)
 	default:
 		jsonError(w, "not found", http.StatusNotFound)
 	}
@@ -87,7 +95,7 @@ func (h *UserHandler) Create(w http.ResponseWriter, r *http.Request) {
 		req.Password = config.GenerateRandomPassword(16)
 	}
 
-	user, err := h.DB.CreateUser(req.Username, req.Password, req.TrafficLimit)
+	user, err := h.DB.CreateUser(req)
 	if err != nil {
 		jsonError(w, fmt.Sprintf("failed to create user: %v", err), http.StatusInternalServerError)
 		return
@@ -219,4 +227,21 @@ func (h *UserHandler) regenerateCaddyfile() {
 
 func parseID(s string) (int64, error) {
 	return strconv.ParseInt(s, 10, 64)
+}
+
+// ResetHWID handles POST /api/users/{id}/hwid/reset
+func (h *UserHandler) ResetHWID(w http.ResponseWriter, r *http.Request, id int64) {
+	if _, err := h.DB.GetUser(id); err != nil {
+		jsonError(w, "user not found", http.StatusNotFound)
+		return
+	}
+
+	if err := h.DB.ResetHWIDs(id); err != nil {
+		jsonError(w, "failed to reset HWIDs", http.StatusInternalServerError)
+		return
+	}
+	
+	h.DB.UpdateHWIDResetTime(id)
+
+	jsonSuccess(w, "HWIDs reset successfully", nil)
 }

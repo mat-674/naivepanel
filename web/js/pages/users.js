@@ -5,19 +5,16 @@
 function renderUsers() {
     return `
         <div class="page-header">
-            <h2>Users</h2>
-            <p>Manage NaiveProxy client accounts</p>
+            <h2>Users Management</h2>
+            <p class="text-muted">Manage NaiveProxy client accounts</p>
         </div>
-        <div class="page-body">
-            <div class="actions-bar">
+        <div class="glass-panel mt-4">
+            <div class="flex justify-between align-center mb-4">
                 <h3 id="users-count"></h3>
-                <button class="btn btn-primary btn-sm" onclick="showCreateUserModal()">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
-                    Add User
-                </button>
+                <button class="btn btn-primary" onclick="showCreateUserModal()">Add User</button>
             </div>
             <div id="users-table">
-                <div class="loading"><div class="spinner"></div></div>
+                <div class="text-center text-muted">Loading...</div>
             </div>
         </div>
         <div id="user-modal-container"></div>
@@ -54,16 +51,22 @@ async function loadUsers() {
             return;
         }
 
+        let subPath = "sub";
+        try {
+            const setRes = await API.getSettings();
+            if (setRes.data && setRes.data.sub_path) subPath = setRes.data.sub_path;
+        } catch (e) { }
+
+        const host = window.location.origin;
+
         tableDiv.innerHTML = `
-            <div class="table-wrapper">
+            <div class="table-container">
                 <table>
                     <thead>
                         <tr>
                             <th>Username</th>
-                            <th>Password</th>
-                            <th>Traffic ↑</th>
-                            <th>Traffic ↓</th>
-                            <th>Limit</th>
+                            <th>Traffic Limit</th>
+                            <th>HWID Limit</th>
                             <th>Status</th>
                             <th>Actions</th>
                         </tr>
@@ -72,35 +75,21 @@ async function loadUsers() {
                         ${users.map(u => `
                             <tr>
                                 <td style="font-weight:600;">${escapeHtml(u.username)}</td>
-                                <td>
-                                    <code style="font-size:12px;color:var(--text-muted);" id="pwd-${u.id}">••••••••</code>
-                                    <button class="btn btn-ghost btn-sm" onclick="togglePassword(${u.id}, '${escapeHtml(u.password)}')" title="Show/Hide">
-                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-                                    </button>
-                                </td>
-                                <td>${formatBytes(u.traffic_up)}</td>
-                                <td>${formatBytes(u.traffic_down)}</td>
-                                <td>${u.traffic_limit > 0 ? formatBytes(u.traffic_limit) : '∞'}</td>
+                                <td>${u.traffic_limit > 0 ? formatBytes(u.traffic_limit) : '<span class="text-muted">∞</span>'}</td>
+                                <td>${u.hwid_limit > 0 ? u.hwid_limit + ' devices' : '<span class="text-muted">Unlimited</span>'}</td>
                                 <td>
                                     ${u.enabled
-                ? '<span class="badge badge-success"><span class="badge-dot"></span> Active</span>'
-                : '<span class="badge badge-danger"><span class="badge-dot"></span> Disabled</span>'
+                ? '<span class="badge badge-success">Active</span>'
+                : '<span class="badge badge-danger">Disabled</span>'
             }
                                 </td>
                                 <td>
-                                    <div class="btn-group">
-                                        <button class="btn btn-ghost btn-icon" onclick="showUserLink(${u.id})" title="Connection Link">
-                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>
-                                        </button>
-                                        <button class="btn btn-ghost btn-icon" onclick="toggleUserStatus(${u.id}, ${!u.enabled})" title="${u.enabled ? 'Disable' : 'Enable'}">
-                                            ${u.enabled
-                ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18.36 6.64a9 9 0 11-12.73 0M12 2v10"/></svg>'
-                : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><path d="M22 4L12 14.01l-3-3"/></svg>'
-            }
-                                        </button>
-                                        <button class="btn btn-ghost btn-icon" onclick="deleteUser(${u.id}, '${escapeHtml(u.username)}')" title="Delete" style="color:var(--danger);">
-                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
-                                        </button>
+                                    <div class="flex gap-2">
+                                        <button class="btn btn-secondary btn-sm" onclick="showSubToken('${escapeHtml(u.sub_token)}', '${escapeHtml(subPath)}', '${escapeHtml(host)}')" title="Subscription URL">Sub URL</button>
+                                        <button class="btn btn-secondary btn-sm" onclick="showUserLink(${u.id})" title="Sing-Box URL">Manual</button>
+                                        <button class="btn btn-secondary btn-sm" onclick="resetUserHWID(${u.id})" title="Reset Device Limits">Reset HWIDs</button>
+                                        <button class="btn btn-secondary btn-sm" onclick="toggleUserStatus(${u.id}, ${!u.enabled})">${u.enabled ? 'Disable' : 'Enable'}</button>
+                                        <button class="btn btn-danger btn-sm" onclick="deleteUser(${u.id}, '${escapeHtml(u.username)}')">Delete</button>
                                     </div>
                                 </td>
                             </tr>
@@ -131,35 +120,38 @@ function showCreateUserModal() {
     if (!container) return;
 
     container.innerHTML = `
-        <div class="modal-overlay" onclick="closeUserModal(event)">
+        <div class="modal-overlay active" onclick="closeUserModal(event)">
             <div class="modal" onclick="event.stopPropagation()">
                 <div class="modal-header">
                     <h3>Add New User</h3>
-                    <button class="modal-close" onclick="closeUserModal()">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
-                    </button>
+                    <button class="close-btn" onclick="closeUserModal()">×</button>
                 </div>
-                <form id="create-user-form">
-                    <div class="form-group">
-                        <label class="form-label">Username</label>
-                        <input type="text" class="form-input" id="new-username" placeholder="Leave empty to auto-generate">
-                        <div class="form-hint">Optional — random username will be generated if empty</div>
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label">Password</label>
-                        <input type="text" class="form-input" id="new-password" placeholder="Leave empty to auto-generate">
-                        <div class="form-hint">Optional — random password will be generated if empty</div>
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label">Traffic Limit (GB)</label>
-                        <input type="number" class="form-input" id="new-traffic-limit" placeholder="0 = unlimited" value="0" min="0">
-                        <div class="form-hint">Set to 0 for unlimited traffic</div>
-                    </div>
-                    <div class="modal-footer">
-                        <button type="button" class="btn btn-outline" onclick="closeUserModal()">Cancel</button>
-                        <button type="submit" class="btn btn-primary" id="create-user-btn">Create User</button>
-                    </div>
-                </form>
+                <div class="modal-body">
+                    <form id="create-user-form">
+                        <div class="form-group">
+                            <label>Username</label>
+                            <input type="text" id="new-username" placeholder="Leave empty to auto-generate">
+                        </div>
+                        <div class="form-group">
+                            <label>Password</label>
+                            <input type="text" id="new-password" placeholder="Leave empty to auto-generate">
+                        </div>
+                        <div class="grid grid-cols-2">
+                            <div class="form-group">
+                                <label>Traffic Limit (GB)</label>
+                                <input type="number" id="new-traffic-limit" placeholder="0 = unlimited" value="0" min="0">
+                            </div>
+                            <div class="form-group">
+                                <label>HWID Devices Limit</label>
+                                <input type="number" id="new-hwid-limit" placeholder="0 = unlimited" value="0" min="0">
+                            </div>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary" onclick="closeUserModal()">Cancel</button>
+                            <button type="submit" class="btn btn-primary" id="create-user-btn">Create User</button>
+                        </div>
+                    </form>
+                </div>
             </div>
         </div>
     `;
@@ -170,12 +162,14 @@ function showCreateUserModal() {
         btn.disabled = true;
 
         const trafficGB = parseFloat(document.getElementById('new-traffic-limit').value) || 0;
+        const hwidLimit = parseInt(document.getElementById('new-hwid-limit').value) || 0;
 
         try {
             await API.createUser({
                 username: document.getElementById('new-username').value.trim(),
                 password: document.getElementById('new-password').value,
                 traffic_limit: Math.floor(trafficGB * 1024 * 1024 * 1024),
+                hwid_limit: hwidLimit,
             });
             Toast.success('User created successfully');
             closeUserModal();
@@ -196,7 +190,7 @@ function closeUserModal(event) {
 async function toggleUserStatus(id, enabled) {
     try {
         await API.updateUser(id, { enabled });
-        Toast.success(`User ${enabled ? 'enabled' : 'disabled'}`);
+        Toast.success(`User ${enabled ? 'enabled' : 'disabled'} `);
         await loadUsers();
     } catch (error) {
         Toast.error(error.message);
@@ -204,7 +198,7 @@ async function toggleUserStatus(id, enabled) {
 }
 
 async function deleteUser(id, username) {
-    if (!confirm(`Delete user "${username}"? This cannot be undone.`)) return;
+    if (!confirm(`Delete user "${username}" ? This cannot be undone.`)) return;
 
     try {
         await API.deleteUser(id);
@@ -229,14 +223,14 @@ async function showUserLink(userId) {
                     <div class="modal-header">
                         <h3>Connection Link</h3>
                         <button class="modal-close" onclick="closeUserModal()">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12" /></svg>
                         </button>
                     </div>
                     <div class="qr-container">
                         ${link.qr_code ? `<img src="data:image/png;base64,${link.qr_code}" alt="QR Code">` : ''}
                         <div class="qr-uri">${escapeHtml(link.uri)}</div>
                         <button class="btn btn-primary btn-sm" onclick="copyToClipboard('${escapeHtml(link.uri)}')">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" /></svg>
                             Copy Link
                         </button>
                     </div>
@@ -264,7 +258,42 @@ function copyToClipboard(text) {
 }
 
 function escapeHtml(str) {
+    if (!str) return '';
     const div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
+}
+
+function showSubToken(token, subPath, host) {
+    const url = `${host}/${subPath}/${token}`;
+    const container = document.getElementById('user-modal-container');
+    if (!container) return;
+
+    container.innerHTML = `
+        <div class="modal-overlay active" onclick="closeUserModal(event)">
+            <div class="modal" onclick="event.stopPropagation()">
+                <div class="modal-header">
+                    <h3>Subscription URL</h3>
+                    <button class="close-btn" onclick="closeUserModal()">×</button>
+                </div>
+                <div class="modal-body text-center">
+                    <p class="mb-4 text-muted">Copy this strictly for use in the NaiveUI client.</p>
+                    <code style="display:block;background:rgba(0,0,0,0.3);padding:1rem;border-radius:8px;word-break:break-all;margin-bottom:1rem;">
+                        ${escapeHtml(url)}
+                    </code>
+                    <button class="btn btn-primary" onclick="copyToClipboard('${escapeHtml(url)}')">Copy to Clipboard</button>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+async function resetUserHWID(id) {
+    if (!confirm('Are you sure you want to clear HWID lockouts for this user?')) return;
+    try {
+        await API.resetHWID(id);
+        Toast.success('HWIDs cleared.');
+    } catch (err) {
+        Toast.error(err.message);
+    }
 }
