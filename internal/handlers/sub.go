@@ -102,7 +102,7 @@ func (h *SubHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 4. Build config response
-	settings, _ := h.DB.GetSettings()
+	settings, _ = h.DB.GetSettings()
 	domain := settings.Domain
 	if domain == "" {
 		domain = "your-server-ip"
