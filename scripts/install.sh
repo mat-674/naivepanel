@@ -715,6 +715,16 @@ main() {
     # --- Mode selection (interactive if not preset) ---
     prompt_mode
 
+    # --- Detect public IP before any banner is printed. Both the bare-metal
+    # and Docker branches share this value, so the SSH-tunnel hint in the
+    # final banner always reflects a single real attempt. ---
+    if detect_public_ip; then
+        log_info "Public IP: ${PUBLIC_IP}"
+    else
+        log_warn "Could not detect public IP automatically (no outbound HTTPS?)."
+        log_warn "Fill in <server-ip> in the banner below with your server's address."
+    fi
+
     # --- Branch ---
     if [[ "${INSTALL_MODE}" == "docker" ]]; then
         # Docker compose doesn't require root, but the stack currently expects
@@ -738,17 +748,6 @@ main() {
     build_panel
     create_services
     start_services
-
-    # Detect public IP right before the banner so both branches use the same
-    # value, and so a transient network blip during the build doesn't leak
-    # a stale "<server-ip>" placeholder into the final output.
-    if detect_public_ip; then
-        log_info "Public IP: ${PUBLIC_IP}"
-    else
-        log_warn "Could not detect public IP automatically (no outbound HTTPS?)."
-        log_warn "Fill in <server-ip> in the banner below with your server's address."
-    fi
-
     show_credentials
 }
 
