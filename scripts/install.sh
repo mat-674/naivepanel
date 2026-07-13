@@ -24,7 +24,7 @@ NC='\033[0m'
 # --- Config ---
 INSTALL_DIR="/opt/naivepanel"
 SERVICE_NAME="naivepanel"
-NAIVE_REPO="klzgrad/naern"
+NAIVE_SERVICE_NAME="naiveproxy"
 PANEL_REPO="mat-674/naivepanel"
 CONFIG_FILE="${INSTALL_DIR}/config.json"
 
@@ -223,6 +223,9 @@ build_panel() {
     fi
 
     chmod +x "${INSTALL_DIR}/naivepanel"
+    mkdir -p "${INSTALL_DIR}/scripts"
+    cp scripts/install.sh "${INSTALL_DIR}/scripts/install.sh"
+    chmod +x "${INSTALL_DIR}/scripts/install.sh"
     cd - > /dev/null
     rm -rf "$BUILD_DIR"
     log_ok "NaivePanel built and installed to ${INSTALL_DIR}/naivepanel"
@@ -249,19 +252,40 @@ build_panel() {
     log_ok "Database initialized"
 }
 
-create_service() {
-    log_info "Creating systemd service..."
+create_services() {
+    log_info "Creating systemd services..."
 
-    cat > /etc/systemd/system/${SERVICE_NAME}.service <<EOF
+    cat > /etc/systemd/system/${NAIVE_SERVICE_NAME}.service <<EOF
 [Unit]
-Description=NaivePanel - NaiveProxy Management Panel
-After=network.target
+Description=NaiveProxy (Caddy + forwardproxy)
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
 User=root
 WorkingDirectory=${INSTALL_DIR}
-ExecStart=${INSTALL_DIR}/naivepanel --data-dir ${INSTALL_DIR}
+ExecStart=${INSTALL_DIR}/naive run --config ${INSTALL_DIR}/Caddyfile --adapter caddyfile
+ExecReload=${INSTALL_DIR}/naive reload --config ${INSTALL_DIR}/Caddyfile --adapter caddyfile
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    cat > /etc/systemd/system/${SERVICE_NAME}.service <<EOF
+[Unit]
+Description=NaivePanel - NaiveProxy Management Panel
+After=network-online.target ${NAIVE_SERVICE_NAME}.service
+Wants=network-online.target ${NAIVE_SERVICE_NAME}.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=${INSTALL_DIR}
+ExecStart=${INSTALL_DIR}/naivepanel --data-dir ${INSTALL_DIR} --bind 127.0.0.1
 Restart=on-failure
 RestartSec=5
 LimitNOFILE=65535
@@ -271,19 +295,21 @@ WantedBy=multi-user.target
 EOF
 
     systemctl daemon-reload
+    systemctl enable ${NAIVE_SERVICE_NAME} > /dev/null 2>&1
     systemctl enable ${SERVICE_NAME} > /dev/null 2>&1
-    log_ok "Systemd service created and enabled"
+    log_ok "Systemd services created and enabled"
 }
 
-start_service() {
-    log_info "Starting NaivePanel..."
+start_services() {
+    log_info "Starting NaiveProxy and NaivePanel..."
+    systemctl start ${NAIVE_SERVICE_NAME}
     systemctl start ${SERVICE_NAME}
     sleep 2
 
-    if systemctl is-active --quiet ${SERVICE_NAME}; then
-        log_ok "NaivePanel is running!"
+    if systemctl is-active --quiet ${NAIVE_SERVICE_NAME} && systemctl is-active --quiet ${SERVICE_NAME}; then
+        log_ok "NaiveProxy and NaivePanel are running!"
     else
-        log_error "Failed to start NaivePanel. Check: journalctl -u ${SERVICE_NAME}"
+        log_error "Failed to start services. Check: journalctl -u ${NAIVE_SERVICE_NAME} and journalctl -u ${SERVICE_NAME}"
         return 1
     fi
 }
@@ -296,8 +322,9 @@ show_credentials() {
     echo -e "${CYAN}║      ${BOLD}  NaivePanel — Installation Complete!  ${NC}${CYAN}       ║${NC}"
     echo -e "${CYAN}╠═══════════════════════════════════════════════════════╣${NC}"
     echo -e "${CYAN}║${NC}"
-    echo -e "${CYAN}║${NC}  ${BOLD}📋 Admin Panel${NC}"
-    echo -e "${CYAN}║${NC}     URL:       ${GREEN}http://${IP}:${PANEL_PORT:-????}${NC}"
+    echo -e "${CYAN}║${NC}  ${BOLD}📋 Admin Panel (loopback only)${NC}"
+    echo -e "${CYAN}║${NC}     URL:       ${GREEN}http://127.0.0.1:${PANEL_PORT:-????}${NC}"
+    echo -e "${CYAN}║${NC}     Tunnel:    ${GREEN}ssh -L ${PANEL_PORT:-????}:127.0.0.1:${PANEL_PORT:-????} root@${IP}${NC}"
     echo -e "${CYAN}║${NC}     Username:  ${GREEN}${ADMIN_USER:-N/A}${NC}"
     echo -e "${CYAN}║${NC}     Password:  ${GREEN}${ADMIN_PASS:-N/A}${NC}"
     echo -e "${CYAN}║${NC}"
@@ -315,7 +342,8 @@ show_credentials() {
         echo -e "${CYAN}║${NC}  ${BOLD}🌐 Domain:${NC}    ${GREEN}${USER_DOMAIN}${NC}"
         echo -e "${CYAN}║${NC}"
     fi
-    echo -e "${CYAN}║${NC}  ${YELLOW}Check logs:  journalctl -u ${SERVICE_NAME} -f${NC}"
+    echo -e "${CYAN}║${NC}  ${YELLOW}Panel logs:  journalctl -u ${SERVICE_NAME} -f${NC}"
+    echo -e "${CYAN}║${NC}  ${YELLOW}Proxy logs:  journalctl -u ${NAIVE_SERVICE_NAME} -f${NC}"
     echo -e "${CYAN}║${NC}  ${RED}⚠  SAVE YOUR CREDENTIALS NOW!${NC}"
     echo -e "${CYAN}║${NC}"
     echo -e "${CYAN}╚═══════════════════════════════════════════════════════╝${NC}"
@@ -327,14 +355,26 @@ uninstall() {
 
     if systemctl is-active --quiet ${SERVICE_NAME} 2>/dev/null; then
         systemctl stop ${SERVICE_NAME}
-        log_ok "Service stopped"
+        log_ok "Panel service stopped"
+    fi
+
+    if systemctl is-active --quiet ${NAIVE_SERVICE_NAME} 2>/dev/null; then
+        systemctl stop ${NAIVE_SERVICE_NAME}
+        log_ok "Proxy service stopped"
     fi
 
     if [[ -f /etc/systemd/system/${SERVICE_NAME}.service ]]; then
         systemctl disable ${SERVICE_NAME} > /dev/null 2>&1
         rm -f /etc/systemd/system/${SERVICE_NAME}.service
         systemctl daemon-reload
-        log_ok "Service removed"
+        log_ok "Panel service removed"
+    fi
+
+    if [[ -f /etc/systemd/system/${NAIVE_SERVICE_NAME}.service ]]; then
+        systemctl disable ${NAIVE_SERVICE_NAME} > /dev/null 2>&1
+        rm -f /etc/systemd/system/${NAIVE_SERVICE_NAME}.service
+        systemctl daemon-reload
+        log_ok "Proxy service removed"
     fi
 
     if [[ -d "$INSTALL_DIR" ]]; then
@@ -392,13 +432,17 @@ update_panel() {
     cd "$BUILD_DIR"
     go build -ldflags="-s -w" -o "${INSTALL_DIR}/naivepanel" main.go
     chmod +x "${INSTALL_DIR}/naivepanel"
+    mkdir -p "${INSTALL_DIR}/scripts"
+    cp scripts/install.sh "${INSTALL_DIR}/scripts/install.sh"
+    chmod +x "${INSTALL_DIR}/scripts/install.sh"
     cd - > /dev/null
     rm -rf "$BUILD_DIR"
 
     log_ok "Binary updated"
 
     # Restart service
-    start_service
+    create_services
+    start_services
     log_ok "NaivePanel updated successfully!"
     exit 0
 }
@@ -427,8 +471,8 @@ main() {
     setup_wizard
     build_naive
     build_panel
-    create_service
-    start_service
+    create_services
+    start_services
     show_credentials
 }
 

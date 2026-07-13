@@ -1,6 +1,35 @@
 package models
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
+
+// OptionalInt64 distinguishes a JSON field that is absent from one that is
+// explicitly present, including an explicit null. UnmarshalJSON is only
+// invoked by encoding/json when the key appears in the body, so Present stays
+// false for an omitted key. This is what lets a PATCH-style update tell "clear
+// this field" (null) apart from "leave it unchanged" (omitted).
+type OptionalInt64 struct {
+	Present bool
+	Value   *int64
+}
+
+// UnmarshalJSON records that the key was present and captures its value (nil
+// for an explicit null).
+func (o *OptionalInt64) UnmarshalJSON(data []byte) error {
+	o.Present = true
+	if string(data) == "null" {
+		o.Value = nil
+		return nil
+	}
+	var v int64
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	o.Value = &v
+	return nil
+}
 
 // Admin represents the panel administrator
 type Admin struct {
@@ -114,12 +143,12 @@ type CreateUserRequest struct {
 
 // UpdateUserRequest is the update user API body
 type UpdateUserRequest struct {
-	Password          *string `json:"password,omitempty"`
-	TrafficLimit      *int64  `json:"traffic_limit,omitempty"`
-	HWIDLimit         *int    `json:"hwid_limit,omitempty"`
-	ExpiresAt         *int64  `json:"expires_at,omitempty"`
-	HWIDResetInterval *int    `json:"hwid_reset_interval,omitempty"`
-	Enabled           *bool   `json:"enabled,omitempty"`
+	Password          *string       `json:"password,omitempty"`
+	TrafficLimit      *int64        `json:"traffic_limit,omitempty"`
+	HWIDLimit         *int          `json:"hwid_limit,omitempty"`
+	ExpiresAt         OptionalInt64 `json:"expires_at"`
+	HWIDResetInterval *int          `json:"hwid_reset_interval,omitempty"`
+	Enabled           *bool         `json:"enabled,omitempty"`
 }
 
 // UserLink contains connection info for a proxy user

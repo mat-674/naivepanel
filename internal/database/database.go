@@ -209,10 +209,10 @@ func (db *DB) UpdateUser(id int64, req models.UpdateUserRequest) error {
 			return err
 		}
 	}
-	if req.ExpiresAt != nil {
+	if req.ExpiresAt.Present {
 		var t *time.Time
-		if *req.ExpiresAt > 0 {
-			tm := time.Unix(*req.ExpiresAt, 0)
+		if req.ExpiresAt.Value != nil && *req.ExpiresAt.Value > 0 {
+			tm := time.Unix(*req.ExpiresAt.Value, 0)
 			t = &tm
 		}
 		if _, err := db.conn.Exec("UPDATE proxy_users SET expires_at = ? WHERE id = ?", t, id); err != nil {

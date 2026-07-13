@@ -11,11 +11,14 @@
 - **Modern UI**: Dark-themed SPA with glassmorphism aesthetics.
 - **Dynamic Caddyfile**: Automatically regenerates and reloads Caddy config on user create/update/delete.
 - **Multi-User Support**: Create, update, and delete proxy users with per-user traffic limits and enable/disable toggles.
-- **Traffic Statistics**: Tracks per-user upload/download traffic; dashboard shows totals across all users.
+- **Private Admin Surface**: The panel binds to loopback only; Caddy exposes the public subscription endpoint over HTTPS.
+- **Separate Services**: NaiveProxy and NaivePanel run as distinct systemd services, so proxy lifecycle survives panel restarts.
 - **ACME / Let's Encrypt**: Built-in SSL certificate management via Caddy.
 - **Connection Links & QR Codes**: Generates `naive+https://` URIs with QR codes on demand.
 - **Service Control**: Start / Stop / Restart NaiveProxy directly from the panel UI.
 - **Single Binary**: Written in Go; static frontend assets are embedded via `embed.FS`.
+
+> Traffic limits, expiry, and HWID values are currently delivered as subscription metadata. Server-side traffic accounting and proxy-side quota enforcement are not implemented yet, so do not rely on those fields for access control.
 
 ## 🛠 Tech Stack
 
@@ -26,7 +29,7 @@
 | **QR Codes** | `skip2/go-qrcode` — base64-encoded PNG served via API |
 | **Proxy Core** | NaiveProxy (Caddy v2.9.1 + `klzgrad/forwardproxy`) |
 
-## � Project Structure
+## 📁 Project Structure
 
 ```
 naivepanel/
@@ -66,8 +69,14 @@ The installer will:
 4. Build NaiveProxy from source (`xcaddy` + `klzgrad/forwardproxy`).
 5. Clone and compile NaivePanel from source.
 6. Initialize the SQLite database and write the initial Caddyfile.
-7. Register and start a systemd service.
-8. Print the panel URL, admin credentials, and proxy connection URI.
+7. Register and start separate `naiveproxy` and `naivepanel` systemd services.
+8. Print the SSH tunnel command, admin credentials, and proxy connection URI.
+
+The admin panel intentionally listens only on `127.0.0.1`. After installation, tunnel it over SSH and open the displayed local URL:
+
+```bash
+ssh -L <panel-port>:127.0.0.1:<panel-port> root@<server-ip>
+```
 
 ### Update
 
@@ -92,6 +101,7 @@ The `naivepanel` binary accepts the following flags:
 | `--config` | auto | Path to `config.json` |
 | `--data-dir` | OS default | Data directory (DB, Caddyfile) |
 | `--port` | from config | HTTP port for the panel |
+| `--bind` | `127.0.0.1` | Loopback address for the administrative panel |
 | `--setup` | `false` | Init DB, print credentials, then exit |
 | `--domain` | — | NaiveProxy domain |
 | `--tls-email` | — | Email for Let's Encrypt |
@@ -114,23 +124,24 @@ All endpoints except `/api/login` require a `Authorization: Bearer <token>` head
 | `DELETE` | `/api/users/{id}` | Delete a proxy user |
 | `GET` | `/api/users/{id}/link` | Get `naive+https://` URI + QR code |
 | `GET` | `/api/settings` | Get server settings |
-| `POST` | `/api/settings` | Save server settings |
+| `PUT` | `/api/settings` | Save server settings |
 | `GET` | `/api/status` | Server & NaiveProxy status + traffic totals |
 | `POST` | `/api/service/{action}` | Control NaiveProxy: `start` / `stop` / `restart` |
 
 ## ⚙️ Post-Install Configuration
 
-1. Open the panel at the URL shown after installation.
+1. Create the SSH tunnel shown after installation, then open the local panel URL.
 2. **Settings** → enter your domain, TLS email, and optional camouflage (decoy) URL.
-3. Click **Apply** — the Caddyfile is regenerated and Caddy is reloaded automatically.
+3. Click **Apply** — the Caddyfile is regenerated and the `naiveproxy` service is reloaded automatically. Subscription URLs are served at `https://<domain>/<subscription-path>/<token>`.
 4. **Users** → add users, set traffic limits, get connection links / QR codes.
 
 ## 🔒 Security
 
-- **Random Port**: The panel listens on a randomly assigned port (printed at install).
+- **Loopback Admin Panel**: The panel listens on a randomly assigned loopback port and is reached through SSH tunnelling by default.
 - **JWT Auth**: All API endpoints are protected by short-lived JSON Web Tokens.
 - **bcrypt**: Admin password stored as a bcrypt hash.
 - **Probe Resistance**: NaiveProxy's built-in probe resistance hides the proxy from scanners.
+- **Credential Validation**: Proxy usernames and passwords are restricted to URL-safe characters (letters, digits, and `- . _ ~`) so they cannot inject directives into the generated Caddyfile or break the `naive+https://` connection URI. Server settings (domain, TLS email, decoy site, subscription path) are normalized and validated before the Caddyfile is regenerated.
 
 ## 📄 License
 

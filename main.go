@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 )
 
 //go:embed web/*
@@ -27,6 +28,7 @@ func main() {
 	configPath := flag.String("config", "", "Path to config file")
 	dataDir := flag.String("data-dir", "", "Data directory")
 	port := flag.Int("port", 0, "Panel port (overrides config)")
+	bind := flag.String("bind", "", "Loopback address for the panel (overrides config)")
 	setup := flag.Bool("setup", false, "Initialize database and print credentials, then exit")
 	domain := flag.String("domain", "", "Domain for NaiveProxy (e.g. proxy.example.com)")
 	tlsEmail := flag.String("tls-email", "", "Email for Let's Encrypt TLS certificate")
@@ -54,10 +56,19 @@ func main() {
 	}
 
 	if *dataDir != "" {
-		cfg.DataDir = *dataDir
+		cfg.OverrideDataDir(*dataDir)
+		if err := cfg.Save(cfgPath); err != nil {
+			log.Fatalf("Failed to save configuration after data directory override: %v", err)
+		}
 	}
 	if *port != 0 {
 		cfg.PanelPort = *port
+	}
+	if *bind != "" {
+		cfg.OverridePanelBind(*bind)
+	}
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("Invalid configuration: %v", err)
 	}
 
 	// Ensure data directory exists
@@ -95,10 +106,18 @@ func main() {
 
 	// Save domain/TLS settings if provided
 	if *domain != "" || *tlsEmail != "" {
+		normalizedDomain, err := naiveproxy.NormalizeDomain(*domain)
+		if err != nil {
+			log.Fatalf("Invalid domain: %v", err)
+		}
+		normalizedTLSEmail, err := naiveproxy.NormalizeTLSEmail(*tlsEmail)
+		if err != nil {
+			log.Fatalf("Invalid TLS email: %v", err)
+		}
 		settings := models.Settings{
-			Domain:   *domain,
+			Domain:   normalizedDomain,
 			Port:     443,
-			TLSEmail: *tlsEmail,
+			TLSEmail: normalizedTLSEmail,
 		}
 		if err := db.SaveSettings(&settings); err != nil {
 			log.Printf("Failed to save settings: %v", err)
@@ -118,6 +137,12 @@ func main() {
 		if proxyPass == "" {
 			proxyPass = config.GenerateRandomPassword(16)
 		}
+		if err := naiveproxy.ValidateProxyUsername(proxyUser); err != nil {
+			log.Fatalf("Invalid proxy username: %v", err)
+		}
+		if err := naiveproxy.ValidateProxyPassword(proxyPass); err != nil {
+			log.Fatalf("Invalid proxy password: %v", err)
+		}
 		if _, err := db.CreateUser(models.CreateUserRequest{Username: proxyUser, Password: proxyPass}); err != nil {
 			log.Printf("Failed to create proxy user: %v", err)
 		} else {
@@ -126,12 +151,13 @@ func main() {
 		}
 	}
 
-	// Generate initial Caddyfile if domain was provided during setup
-	if *setup && *domain != "" {
+	// Generate an initial Caddyfile during setup so the dedicated NaiveProxy
+	// service has a valid configuration even before the first settings update.
+	if *setup {
 		settings, _ := db.GetSettings()
 		users, _ := db.GetEnabledUsers()
 		if settings != nil {
-			content, err := naiveproxy.GenerateCaddyfile(settings, users)
+			content, err := naiveproxy.GenerateCaddyfile(settings, users, cfg.PanelUpstream())
 			if err == nil {
 				manager := naiveproxy.NewManager(cfg.NaiveBinary, cfg.CaddyfilePath)
 				if err := manager.WriteCaddyfile(content); err != nil {
@@ -163,8 +189,8 @@ func main() {
 
 	// Create handlers
 	authHandler := &handlers.AuthHandler{DB: db, JWTSecret: cfg.JWTSecret}
-	userHandler := &handlers.UserHandler{DB: db, Manager: manager}
-	settingsHandler := &handlers.SettingsHandler{DB: db, Manager: manager}
+	userHandler := &handlers.UserHandler{DB: db, Manager: manager, PanelUpstream: cfg.PanelUpstream()}
+	settingsHandler := &handlers.SettingsHandler{DB: db, Manager: manager, PanelUpstream: cfg.PanelUpstream()}
 	statusHandler := &handlers.StatusHandler{DB: db, Manager: manager}
 	subHandler := &handlers.SubHandler{DB: db}
 
@@ -198,22 +224,23 @@ func main() {
 			subHandler.ServeHTTP(w, r)
 			return
 		}
-		
+
 		// Fallback to static files
 		fileServer.ServeHTTP(w, r)
 	})
 
-	// Apply CORS middleware
-	handler := handlers.CORSMiddleware(mux)
-
 	// Start server
-	addr := fmt.Sprintf("0.0.0.0:%d", cfg.PanelPort)
+	addr := cfg.PanelAddress()
 	log.Printf("NaivePanel starting on http://%s", addr)
 	log.Printf("Data directory: %s", cfg.DataDir)
 
 	server := &http.Server{
-		Addr:    addr,
-		Handler: handler,
+		Addr:              addr,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	// Graceful shutdown

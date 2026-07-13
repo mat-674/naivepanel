@@ -15,8 +15,9 @@ import (
 
 // UserHandler handles proxy user CRUD operations
 type UserHandler struct {
-	DB      *database.DB
-	Manager *naiveproxy.Manager
+	DB            *database.DB
+	Manager       *naiveproxy.Manager
+	PanelUpstream string
 }
 
 // ServeHTTP routes user requests
@@ -95,6 +96,15 @@ func (h *UserHandler) Create(w http.ResponseWriter, r *http.Request) {
 		req.Password = config.GenerateRandomPassword(16)
 	}
 
+	if err := naiveproxy.ValidateProxyUsername(req.Username); err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := naiveproxy.ValidateProxyPassword(req.Password); err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	user, err := h.DB.CreateUser(req)
 	if err != nil {
 		jsonError(w, fmt.Sprintf("failed to create user: %v", err), http.StatusInternalServerError)
@@ -123,6 +133,13 @@ func (h *UserHandler) Update(w http.ResponseWriter, r *http.Request, id int64) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, "invalid request body", http.StatusBadRequest)
 		return
+	}
+
+	if req.Password != nil {
+		if err := naiveproxy.ValidateProxyPassword(*req.Password); err != nil {
+			jsonError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 	}
 
 	if err := h.DB.UpdateUser(id, req); err != nil {
@@ -206,7 +223,7 @@ func (h *UserHandler) regenerateCaddyfile() {
 		return
 	}
 
-	content, err := naiveproxy.GenerateCaddyfile(settings, users)
+	content, err := naiveproxy.GenerateCaddyfile(settings, users, h.PanelUpstream)
 	if err != nil {
 		log.Printf("Failed to generate caddyfile: %v", err)
 		return
@@ -240,7 +257,7 @@ func (h *UserHandler) ResetHWID(w http.ResponseWriter, r *http.Request, id int64
 		jsonError(w, "failed to reset HWIDs", http.StatusInternalServerError)
 		return
 	}
-	
+
 	h.DB.UpdateHWIDResetTime(id)
 
 	jsonSuccess(w, "HWIDs reset successfully", nil)

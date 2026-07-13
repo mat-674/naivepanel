@@ -1,8 +1,9 @@
 {
   "panel_port": 43979,
+  "panel_bind": "127.0.0.1",
   "jwt_secret": "e771fa748d4362a53286661b49f8c9714796192ec457722346c600f8c4bfa16c",
   "data_dir": "/opt/naivepanel",
-  "naive_binary": "\\opt\\naivepanel\\naive",
-  "caddyfile_path": "\\opt\\naivepanel\\Caddyfile",
+  "naive_binary": "/opt/naivepanel/naive",
+  "caddyfile_path": "/opt/naivepanel/Caddyfile",
   "log_level": "info"
 }

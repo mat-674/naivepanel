@@ -51,13 +51,11 @@ async function loadUsers() {
             return;
         }
 
-        let subPath = "sub";
+        let subscriptionBaseURL = "";
         try {
             const setRes = await API.getSettings();
-            if (setRes.data && setRes.data.sub_path) subPath = setRes.data.sub_path;
+            if (setRes.data) subscriptionBaseURL = getSubscriptionBaseURL(setRes.data);
         } catch (e) { }
-
-        const host = window.location.origin;
 
         tableDiv.innerHTML = `
             <div class="table-container">
@@ -87,12 +85,12 @@ async function loadUsers() {
                                 </td>
                                 <td>
                                     <div class="flex gap-2">
-                                        <button class="btn btn-secondary btn-sm" onclick="showSubToken('${escapeHtml(u.sub_token)}', '${escapeHtml(subPath)}', '${escapeHtml(host)}')" title="Subscription URL">Sub URL</button>
+                                        <button class="btn btn-secondary btn-sm" onclick="showSubToken('${jsAttr(u.sub_token)}', '${jsAttr(subscriptionBaseURL)}')" title="Subscription URL">Sub URL</button>
                                         <button class="btn btn-secondary btn-sm" onclick="showUserLink(${u.id})" title="Sing-Box URL">Manual</button>
-                                        <button class="btn btn-secondary btn-sm" onclick='showEditUserModal(${JSON.stringify(u).replace(/'/g, "&#39;")})' title="Edit User">Edit</button>
+                                        <button class="btn btn-secondary btn-sm" onclick="showEditUserModal(${escapeHtml(JSON.stringify(u))})" title="Edit User">Edit</button>
                                         <button class="btn btn-secondary btn-sm" onclick="resetUserHWID(${u.id})" title="Reset Device Limits">Reset HWIDs</button>
                                         <button class="btn btn-secondary btn-sm" onclick="toggleUserStatus(${u.id}, ${!u.enabled})">${u.enabled ? 'Disable' : 'Enable'}</button>
-                                        <button class="btn btn-danger btn-sm" onclick="deleteUser(${u.id}, '${escapeHtml(u.username)}')">Delete</button>
+                                        <button class="btn btn-danger btn-sm" onclick="deleteUser(${u.id}, '${jsAttr(u.username)}')">Delete</button>
                                     </div>
                                 </td>
                             </tr>
@@ -103,18 +101,6 @@ async function loadUsers() {
         `;
     } catch (error) {
         Toast.error(error.message);
-    }
-}
-
-function togglePassword(userId, password) {
-    const el = document.getElementById(`pwd-${userId}`);
-    if (!el) return;
-    if (el.textContent === '••••••••') {
-        el.textContent = password;
-        el.style.color = 'var(--text-primary)';
-    } else {
-        el.textContent = '••••••••';
-        el.style.color = 'var(--text-muted)';
     }
 }
 
@@ -133,11 +119,12 @@ function showCreateUserModal() {
                     <form id="create-user-form">
                         <div class="form-group">
                             <label>Username</label>
-                            <input type="text" id="new-username" placeholder="Leave empty to auto-generate">
+                            <input type="text" id="new-username" placeholder="Leave empty to auto-generate" maxlength="64" pattern="[A-Za-z0-9._~-]*" title="Letters, digits and - . _ ~ only">
                         </div>
                         <div class="form-group">
                             <label>Password</label>
-                            <input type="text" id="new-password" placeholder="Leave empty to auto-generate">
+                            <input type="text" id="new-password" placeholder="Leave empty to auto-generate" maxlength="128" pattern="[A-Za-z0-9._~-]*" title="Letters, digits and - . _ ~ only">
+                            <small class="text-muted">Allowed characters: letters, digits, and - . _ ~</small>
                         </div>
                         <div class="grid grid-cols-2">
                             <div class="form-group">
@@ -228,7 +215,8 @@ function showEditUserModal(user) {
                         </div>
                         <div class="form-group">
                             <label>New Password</label>
-                            <input type="text" id="edit-password" placeholder="Leave blank to keep current password">
+                            <input type="text" id="edit-password" placeholder="Leave blank to keep current password" maxlength="128" pattern="[A-Za-z0-9._~-]*" title="Letters, digits and - . _ ~ only">
+                            <small class="text-muted">Allowed characters: letters, digits, and - . _ ~</small>
                         </div>
                         <div class="grid grid-cols-2">
                             <div class="form-group">
@@ -273,7 +261,9 @@ function showEditUserModal(user) {
         if (expiresAtStr) {
             updateData.expires_at = Math.floor(new Date(expiresAtStr).getTime() / 1000);
         } else {
-            updateData.expires_at = null; // Backend expects pointer to *int64 or omitted. nil pointer updates to null in Go.
+            // The backend treats explicit null as "clear expiry" and an omitted
+            // key as "leave unchanged" (OptionalInt64 tri-state), so send null here.
+            updateData.expires_at = null;
         }
 
         if (newPassword.trim() !== '') {
@@ -340,7 +330,7 @@ async function showUserLink(userId) {
                     <div class="qr-container">
                         ${link.qr_code ? `<img src="data:image/png;base64,${link.qr_code}" alt="QR Code">` : ''}
                         <div class="qr-uri">${escapeHtml(link.uri)}</div>
-                        <button class="btn btn-primary btn-sm" onclick="copyToClipboard('${escapeHtml(link.uri)}')">
+                        <button class="btn btn-primary btn-sm" onclick="copyToClipboard('${jsAttr(link.uri)}')">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" /></svg>
                             Copy Link
                         </button>
@@ -368,15 +358,60 @@ function copyToClipboard(text) {
     });
 }
 
+// escapeHtml makes a string safe to interpolate into HTML text or a
+// double-quoted attribute value. It escapes all five significant characters,
+// including both quote styles (the DOM textContent trick left quotes intact,
+// which allowed breakout from value="..." attributes).
 function escapeHtml(str) {
-    if (!str) return '';
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
+    if (str === null || str === undefined) return '';
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
 }
 
-function showSubToken(token, subPath, host) {
-    const url = `${host}/${subPath}/${token}`;
+// jsAttr makes a string safe to embed as a single-quoted JS string literal
+// inside a double-quoted inline handler, e.g. onclick="fn('${jsAttr(x)}')".
+// The browser HTML-decodes the attribute before the JS engine parses it, so
+// HTML-escaping alone would not stop a quote from breaking out of the JS
+// string. The value is first escaped for the JS string context and then
+// HTML-encoded so it survives the surrounding double-quoted attribute.
+function jsAttr(str) {
+    if (str === null || str === undefined) return '';
+    const jsEscaped = String(str)
+        .replace(/\\/g, '\\\\')
+        .replace(/'/g, "\\'")
+        .replace(/\r/g, '\\r')
+        .replace(/\n/g, '\\n')
+        .replace(/ /g, '\\u2028')
+        .replace(/ /g, '\\u2029');
+    return jsEscaped
+        .replace(/&/g, '&amp;')
+        .replace(/"/g, '&quot;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+}
+
+function getSubscriptionBaseURL(settings) {
+    const domain = (settings.domain || '').trim();
+    const subPath = (settings.sub_path || 'sub').replace(/^\/+|\/+$/g, '');
+    const port = Number(settings.port) || 443;
+
+    if (!domain || !subPath) return '';
+
+    const authority = port === 443 ? domain : `${domain}:${port}`;
+    return `https://${authority}/${subPath}`;
+}
+
+function showSubToken(token, subscriptionBaseURL) {
+    if (!subscriptionBaseURL) {
+        Toast.error('Configure a public domain before creating subscription URLs.');
+        return;
+    }
+
+    const url = `${subscriptionBaseURL}/${encodeURIComponent(token)}`;
     const container = document.getElementById('user-modal-container');
     if (!container) return;
 
@@ -392,7 +427,7 @@ function showSubToken(token, subPath, host) {
                     <code style="display:block;background:rgba(0,0,0,0.3);padding:1rem;border-radius:8px;word-break:break-all;margin-bottom:1rem;">
                         ${escapeHtml(url)}
                     </code>
-                    <button class="btn btn-primary" onclick="copyToClipboard('${escapeHtml(url)}')">Copy to Clipboard</button>
+                    <button class="btn btn-primary" onclick="copyToClipboard('${jsAttr(url)}')">Copy to Clipboard</button>
                 </div>
             </div>
         </div>
