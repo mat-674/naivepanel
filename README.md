@@ -63,17 +63,17 @@ Requires Docker Engine with the Compose plugin on a **Linux** host (host network
 ```bash
 git clone https://github.com/mat-674/naivepanel.git
 cd naivepanel
-bash scripts/docker-install.sh
+bash scripts/install.sh --mode docker
 ```
 
 The script will ask for an optional domain and Let's Encrypt email, build the image (compiles NaiveProxy and the panel from source — takes a few minutes on first run), start the stack, and print credentials plus the SSH tunnel command.
 
 ```bash
 # Stop (keeps data)
-bash scripts/docker-install.sh --down
+bash scripts/install.sh --mode docker --down
 
 # Stop and wipe all data
-bash scripts/docker-install.sh --uninstall
+bash scripts/install.sh --mode docker --uninstall-docker
 ```
 
 **How it works:**
@@ -121,6 +121,18 @@ bash <(curl -sL https://raw.githubusercontent.com/mat-674/naivepanel/main/script
 ```
 
 ## ⚙️ CLI Flags
+
+The `scripts/install.sh` installer accepts the following flags:
+
+| Flag | Description |
+|---|---|
+| _(default)_ | Interactive mode selection: bare-metal (systemd) or Docker |
+| `--mode native` | Force bare-metal install (default for non-interactive `curl \| bash`) |
+| `--mode docker` | Force Docker install |
+| `--update` | Update an existing bare-metal install to the latest version |
+| `--uninstall` | Remove a bare-metal install |
+| `--down` | Stop the Docker stack (keeps data volume) |
+| `--uninstall-docker` | Remove the Docker stack AND its data volume |
 
 The `naivepanel` binary accepts the following flags:
 
