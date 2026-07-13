@@ -443,9 +443,25 @@ setup_wizard_docker() {
 # entrypoint to finish first-boot init, parses credentials out of the logs,
 # and shows the final banner.
 install_docker() {
-    # Resolve repo root from the script's location.
+    # Resolve repo root from the script's location. When the script is
+    # piped via `curl ... | bash`, $BASH_SOURCE[0] is empty and
+    # `dirname ""` returns "." — which silently breaks the .env path
+    # (it would land in whatever the caller's $PWD happens to be).
+    # Refuse to run in that case; the Docker flow needs the local
+    # docker-compose.yml + Dockerfile, so the user has to clone first.
     local SCRIPT_DIR
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if [[ -n "${BASH_SOURCE[0]:-}" && "${BASH_SOURCE[0]}" != "bash" && "${BASH_SOURCE[0]}" != "/dev/stdin" && -f "${BASH_SOURCE[0]}" ]]; then
+        SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    elif [[ -n "${0:-}" && "${0}" != "bash" && "${0}" != "/dev/stdin" && -f "${0}" ]]; then
+        SCRIPT_DIR="$(cd "$(dirname "${0}")" && pwd)"
+    else
+        log_error "Cannot determine the install script's location."
+        log_error "The Docker flow needs docker-compose.yml from the repo, so clone first:"
+        log_error "  git clone https://github.com/${PANEL_REPO}.git"
+        log_error "  cd naivepanel"
+        log_error "  bash scripts/install.sh --mode docker"
+        exit 1
+    fi
     local REPO_ROOT
     REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
     cd "${REPO_ROOT}"
