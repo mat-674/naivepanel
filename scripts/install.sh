@@ -507,10 +507,27 @@ install_docker() {
         exit 0
     fi
 
-    # --- Collect first-boot settings (only used on the very first run) ---
+    # --- Collect / load first-boot settings. Reused on every run so the
+    # banner can show the configured domain even when the stack was
+    # initialised by a previous invocation. ---
     local ENV_FILE="${REPO_ROOT}/.env"
     if [[ -f "${ENV_FILE}" ]]; then
         log_info "Reusing existing .env for build-time settings."
+        # Pull DOMAIN / TLS_EMAIL into the current shell without executing
+        # arbitrary code in the .env (only `KEY=VALUE` lines are honoured).
+        local line key val
+        while IFS= read -r line; do
+            [[ "$line" =~ ^[[:space:]]*# ]] && continue
+            [[ "$line" =~ ^[[:space:]]*$ ]] && continue
+            if [[ "$line" =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+                key="${BASH_REMATCH[1]}"
+                val="${BASH_REMATCH[2]}"
+                case "$key" in
+                    DOMAIN)     USER_DOMAIN="$val" ;;
+                    TLS_EMAIL)  USER_TLS_EMAIL="$val" ;;
+                esac
+            fi
+        done < "${ENV_FILE}"
     else
         setup_wizard_docker
         {
