@@ -101,6 +101,16 @@ type Settings struct {
 	TLSEmail  string `json:"tls_email"`
 	DecoySite string `json:"decoy_site"`
 	SubPath   string `json:"sub_path"`
+
+	// PanelPublic publishes the loopback admin panel at /<PanelPublicPath>/*
+	// through Caddy with HTTP Basic Auth in front. Off by default; the panel
+	// stays on 127.0.0.1 and is reached via SSH tunneling.
+	PanelPublic     bool   `json:"panel_public"`
+	PanelPublicPath string `json:"panel_public_path,omitempty"`
+	PanelBasicUser  string `json:"panel_basic_user,omitempty"`
+	// PanelBasicHash is a bcrypt hash of the Basic Auth password, written
+	// verbatim into Caddy's basicauth directive. Plaintext is never stored.
+	PanelBasicHash string `json:"panel_basic_hash,omitempty"`
 }
 
 // ServerStatus represents the current state of NaiveProxy

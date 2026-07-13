@@ -329,23 +329,41 @@ func (db *DB) GetSettings() (*models.Settings, error) {
 		subPath = "sub" // default Custom Sub URL Prefix
 	}
 
+	panelPath := all["panel_public_path"]
+	if panelPath == "" {
+		panelPath = "panel" // default publish path under the main domain
+	}
+
 	return &models.Settings{
-		Domain:    all["domain"],
-		Port:      port,
-		TLSEmail:  all["tls_email"],
-		DecoySite: all["decoy_site"],
-		SubPath:   subPath,
+		Domain:          all["domain"],
+		Port:            port,
+		TLSEmail:        all["tls_email"],
+		DecoySite:       all["decoy_site"],
+		SubPath:         subPath,
+		PanelPublic:     all["panel_public"] == "true",
+		PanelPublicPath: panelPath,
+		PanelBasicUser:  all["panel_basic_user"],
+		PanelBasicHash:  all["panel_basic_hash"],
 	}, nil
 }
 
 // SaveSettings saves a Settings struct
 func (db *DB) SaveSettings(s *models.Settings) error {
+	panelPath := s.PanelPublicPath
+	if panelPath == "" {
+		panelPath = "panel"
+	}
+
 	pairs := map[string]string{
-		"domain":     s.Domain,
-		"port":       fmt.Sprintf("%d", s.Port),
-		"tls_email":  s.TLSEmail,
-		"decoy_site": s.DecoySite,
-		"sub_path":   s.SubPath,
+		"domain":            s.Domain,
+		"port":              fmt.Sprintf("%d", s.Port),
+		"tls_email":         s.TLSEmail,
+		"decoy_site":        s.DecoySite,
+		"sub_path":          s.SubPath,
+		"panel_public":      boolToSetting(s.PanelPublic),
+		"panel_public_path": panelPath,
+		"panel_basic_user":  s.PanelBasicUser,
+		"panel_basic_hash":  s.PanelBasicHash,
 	}
 
 	for key, value := range pairs {
@@ -354,6 +372,13 @@ func (db *DB) SaveSettings(s *models.Settings) error {
 		}
 	}
 	return nil
+}
+
+func boolToSetting(b bool) string {
+	if b {
+		return "true"
+	}
+	return ""
 }
 
 // --- Subscriptions & HWID ---

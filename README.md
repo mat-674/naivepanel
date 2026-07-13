@@ -150,6 +150,12 @@ The `naivepanel` binary accepts the following flags:
 | `--proxy-pass` | auto | Proxy password |
 | `--admin-user` | auto | Admin username |
 | `--admin-pass` | auto | Admin password |
+| `--panel-public-enable` | `false` | Publish the panel at `/<path>/*` behind HTTP Basic Auth, then exit |
+| `--panel-public-disable` | `false` | Unpublish the panel (back to loopback only), then exit |
+| `--panel-public-path` | `panel` | Path prefix used by `--panel-public-enable` |
+| `--panel-basic-user` | auto | Basic Auth username for the published panel |
+| `--panel-basic-pass` | auto | Basic Auth password for the published panel |
+| `--start-proxy` | `false` | Supervise NaiveProxy as a child process (containers; ignored under systemd) |
 
 ## 🔌 API Endpoints
 
@@ -174,6 +180,33 @@ All endpoints except `/api/login` require a `Authorization: Bearer <token>` head
 2. **Settings** → enter your domain, TLS email, and optional camouflage (decoy) URL.
 3. Click **Apply** — the Caddyfile is regenerated and the `naiveproxy` service is reloaded automatically. Subscription URLs are served at `https://<domain>/<subscription-path>/<token>`.
 4. **Users** → add users, set traffic limits, get connection links / QR codes.
+
+### Publishing the panel behind Basic Auth (optional)
+
+By default the panel lives only on `127.0.0.1` and is reached via SSH tunnel. If you would rather expose it on the public domain — for example from a phone where keeping an SSH tunnel is awkward — the panel can be reverse-proxied through Caddy at `/<path>/*` with HTTP Basic Auth in front. The Basic Auth password is bcrypt-hashed in the database; the plaintext is printed once on enable.
+
+```bash
+# Bare-metal:
+sudo /opt/naivepanel/naivepanel --panel-public-enable
+# or with explicit values:
+sudo /opt/naivepanel/naivepanel --panel-public-enable \
+    --panel-public-path panel \
+    --panel-basic-user admin \
+    --panel-basic-pass 'choose-a-strong-password'
+
+# Docker:
+docker compose exec naivepanel naivepanel --panel-public-enable
+```
+
+The Caddyfile is regenerated and NaiveProxy is reloaded (if running) so the new route activates immediately. Reach the panel at `https://<domain>/<path>/`. To put it back behind loopback:
+
+```bash
+sudo /opt/naivepanel/naivepanel --panel-public-disable
+# or:
+docker compose exec naivepanel naivepanel --panel-public-disable
+```
+
+> ⚠️ Publishing the panel puts a second login surface on the public Internet. Basic Auth is the only thing standing between an attacker and your bcrypt-hashed admin password — pick a strong, unique password and consider adding fail2ban or restricting by source IP in Caddy if you can.
 
 ## 🔒 Security
 

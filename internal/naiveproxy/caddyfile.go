@@ -35,6 +35,18 @@ const caddyfileTemplate = `{
 		reverse_proxy {{ .PanelUpstream }}
 	}
 
+{{- if .PanelPublic }}
+	# Publish the admin panel at /{{ .PanelPublicPath }}/* behind HTTP Basic
+	# Auth. Useful when the operator can't keep an SSH tunnel open. Off by
+	# default — the loopback panel is still the safer option.
+	handle /{{ .PanelPublicPath }}/* {
+		basicauth {
+			{{ .PanelBasicUser }} {{ .PanelBasicHash }}
+		}
+		reverse_proxy {{ .PanelUpstream }}
+	}
+{{- end }}
+
 	# All remaining requests are handled by NaiveProxy or the configured decoy.
 	handle {
 		route {
@@ -70,6 +82,14 @@ type CaddyfileData struct {
 	SubscriptionPath string
 	// PanelUpstream is the loopback address of the administrative panel.
 	PanelUpstream string
+
+	// PanelPublic publishes /<PanelPublicPath>/* through Caddy with HTTP
+	// Basic Auth in front of the loopback panel. When false, no extra
+	// route is emitted.
+	PanelPublic     bool
+	PanelPublicPath string
+	PanelBasicUser  string
+	PanelBasicHash  string
 }
 
 // GenerateCaddyfile generates a Caddyfile from settings and users
@@ -110,6 +130,32 @@ func GenerateCaddyfile(settings *models.Settings, users []models.ProxyUser, pane
 		}
 	}
 
+	// Panel-publication settings are only validated when the user actually
+	// opted in. When off, the route block is omitted from the Caddyfile
+	// entirely and the panel stays on loopback.
+	panelPublic := settings.PanelPublic
+	panelPath := ""
+	panelUser := ""
+	panelHash := ""
+	if panelPublic {
+		path, perr := NormalizeSubscriptionPath(settings.PanelPublicPath)
+		if perr != nil {
+			return "", fmt.Errorf("panel publish path: %w", perr)
+		}
+		panelPath = path
+		if panelPath == subscriptionPath {
+			return "", fmt.Errorf("panel publish path conflicts with subscription path %q", subscriptionPath)
+		}
+		if err := ValidateProxyUsername(settings.PanelBasicUser); err != nil {
+			return "", fmt.Errorf("panel basic auth user: %w", err)
+		}
+		if !strings.HasPrefix(settings.PanelBasicHash, "$2") {
+			return "", fmt.Errorf("panel basic auth hash is not a bcrypt hash")
+		}
+		panelUser = settings.PanelBasicUser
+		panelHash = settings.PanelBasicHash
+	}
+
 	data := CaddyfileData{
 		Domain:           domain,
 		Port:             settings.Port,
@@ -118,6 +164,10 @@ func GenerateCaddyfile(settings *models.Settings, users []models.ProxyUser, pane
 		Users:            users,
 		SubscriptionPath: subscriptionPath,
 		PanelUpstream:    panelUpstream,
+		PanelPublic:      panelPublic,
+		PanelPublicPath:  panelPath,
+		PanelBasicUser:   panelUser,
+		PanelBasicHash:   panelHash,
 	}
 
 	if data.Port == 0 {

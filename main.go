@@ -38,6 +38,11 @@ func main() {
 	proxyPassFlag := flag.String("proxy-pass", "", "Proxy user password (auto-generated if empty)")
 	adminUserFlag := flag.String("admin-user", "", "Admin username (auto-generated if empty)")
 	adminPassFlag := flag.String("admin-pass", "", "Admin password (auto-generated if empty)")
+	panelPublicEnable := flag.Bool("panel-public-enable", false, "Publish the panel at /<path>/* behind HTTP Basic Auth, then exit")
+	panelPublicDisable := flag.Bool("panel-public-disable", false, "Unpublish the panel (back to loopback only), then exit")
+	panelPublicPathFlag := flag.String("panel-public-path", "", "Path prefix for --panel-public-enable (default: panel)")
+	panelBasicUser := flag.String("panel-basic-user", "", "Basic Auth username for the published panel (auto-generated if empty)")
+	panelBasicPass := flag.String("panel-basic-pass", "", "Basic Auth password for the published panel (auto-generated if empty)")
 	flag.Parse()
 
 	// Determine config path
@@ -168,6 +173,22 @@ func main() {
 				}
 			}
 		}
+	}
+
+	// --- Panel publication toggles. Each writes settings, regenerates the
+	// Caddyfile (so Caddy picks up the new route immediately), and exits so
+	// these commands can be scripted. ---
+	if *panelPublicEnable {
+		if err := enablePanelPublic(db, cfg, *panelPublicPathFlag, *panelBasicUser, *panelBasicPass); err != nil {
+			log.Fatalf("Failed to publish panel: %v", err)
+		}
+		return
+	}
+	if *panelPublicDisable {
+		if err := disablePanelPublic(db, cfg); err != nil {
+			log.Fatalf("Failed to unpublish panel: %v", err)
+		}
+		return
 	}
 
 	if *setup {
@@ -303,4 +324,119 @@ func startProxyProcess(db *database.DB, manager *naiveproxy.Manager, panelUpstre
 		return
 	}
 	log.Println("NaiveProxy started")
+}
+
+// enablePanelPublic turns on the public /<path>/* route and writes a fresh
+// Caddyfile so Caddy picks it up on its next reload. Auto-generates Basic
+// Auth credentials when the corresponding flags are empty.
+func enablePanelPublic(db *database.DB, cfg *config.Config, path, user, pass string) error {
+	settings, err := db.GetSettings()
+	if err != nil {
+		return fmt.Errorf("read settings: %w", err)
+	}
+	if settings.Domain == "" {
+		return fmt.Errorf("a Domain must be configured before publishing the panel (run the installer or set Domain via API)")
+	}
+
+	if path == "" {
+		path = "panel"
+	}
+	path = strings.Trim(path, "/")
+	if path == "" || strings.Contains(path, "/") {
+		return fmt.Errorf("panel publish path must be a single URL-safe segment (got %q)", path)
+	}
+	if user == "" {
+		user = config.GenerateRandomUsername(8)
+	}
+	if pass == "" {
+		pass = config.GenerateRandomPassword(20)
+	}
+	if err := naiveproxy.ValidateProxyUsername(user); err != nil {
+		return fmt.Errorf("panel basic auth user: %w", err)
+	}
+	if err := naiveproxy.ValidateProxyPassword(pass); err != nil {
+		return fmt.Errorf("panel basic auth password: %w", err)
+	}
+
+	hash, err := auth.HashPassword(pass)
+	if err != nil {
+		return fmt.Errorf("hash basic auth password: %w", err)
+	}
+
+	settings.PanelPublic = true
+	settings.PanelPublicPath = path
+	settings.PanelBasicUser = user
+	settings.PanelBasicHash = hash
+	if err := db.SaveSettings(settings); err != nil {
+		return fmt.Errorf("save settings: %w", err)
+	}
+
+	users, err := db.GetEnabledUsers()
+	if err != nil {
+		return fmt.Errorf("read users: %w", err)
+	}
+	content, err := naiveproxy.GenerateCaddyfile(settings, users, cfg.PanelUpstream())
+	if err != nil {
+		return fmt.Errorf("generate caddyfile: %w", err)
+	}
+	manager := naiveproxy.NewManager(cfg.NaiveBinary, cfg.CaddyfilePath)
+	if err := manager.WriteCaddyfile(content); err != nil {
+		return fmt.Errorf("write caddyfile: %w", err)
+	}
+	if err := manager.Reload(); err != nil {
+		log.Printf("NaiveProxy is not running, so the new route will activate on the next start: %v", err)
+	}
+
+	scheme := "https"
+	if settings.TLSEmail == "" {
+		scheme = "https" // Caddy's `tls internal` still serves HTTPS with a self-signed cert
+	}
+	url := fmt.Sprintf("%s://%s/%s/", scheme, settings.Domain, path)
+	fmt.Println("Panel published.")
+	fmt.Printf("Panel Public URL: %s\n", url)
+	fmt.Printf("Basic Auth User:  %s\n", user)
+	fmt.Printf("Basic Auth Pass:  %s\n", pass)
+	fmt.Println("If NaiveProxy was already running it has been reloaded; otherwise the route activates on next start.")
+	return nil
+}
+
+// disablePanelPublic flips the flag off, regenerates the Caddyfile without
+// the route block, and exits.
+func disablePanelPublic(db *database.DB, cfg *config.Config) error {
+	settings, err := db.GetSettings()
+	if err != nil {
+		return fmt.Errorf("read settings: %w", err)
+	}
+	if !settings.PanelPublic {
+		fmt.Println("Panel is already loopback-only; nothing to do.")
+		return nil
+	}
+
+	settings.PanelPublic = false
+	settings.PanelPublicPath = ""
+	settings.PanelBasicUser = ""
+	settings.PanelBasicHash = ""
+	if err := db.SaveSettings(settings); err != nil {
+		return fmt.Errorf("save settings: %w", err)
+	}
+
+	users, err := db.GetEnabledUsers()
+	if err != nil {
+		return fmt.Errorf("read users: %w", err)
+	}
+	content, err := naiveproxy.GenerateCaddyfile(settings, users, cfg.PanelUpstream())
+	if err != nil {
+		return fmt.Errorf("generate caddyfile: %w", err)
+	}
+	manager := naiveproxy.NewManager(cfg.NaiveBinary, cfg.CaddyfilePath)
+	if err := manager.WriteCaddyfile(content); err != nil {
+		return fmt.Errorf("write caddyfile: %w", err)
+	}
+	if err := manager.Reload(); err != nil {
+		log.Printf("NaiveProxy is not running, so the route removal will activate on the next start: %v", err)
+	}
+
+	fmt.Println("Panel unpublished. It is reachable only via SSH tunnel on 127.0.0.1.")
+	fmt.Println("If NaiveProxy was already running it has been reloaded; otherwise the change activates on next start.")
+	return nil
 }
