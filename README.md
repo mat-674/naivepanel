@@ -56,6 +56,36 @@ naivepanel/
 
 ## 📥 Installation
 
+### Option A — Docker (recommended)
+
+Requires Docker Engine with the Compose plugin on a **Linux** host (host networking is Linux-only).
+
+```bash
+git clone https://github.com/mat-674/naivepanel.git
+cd naivepanel
+bash scripts/docker-install.sh
+```
+
+The script will ask for an optional domain and Let's Encrypt email, build the image (compiles NaiveProxy and the panel from source — takes a few minutes on first run), start the stack, and print credentials plus the SSH tunnel command.
+
+```bash
+# Stop (keeps data)
+bash scripts/docker-install.sh --down
+
+# Stop and wipe all data
+bash scripts/docker-install.sh --uninstall
+```
+
+**How it works:**
+- Uses `network_mode: host` so Caddy binds the host's public `:443`/`:80`, while the admin panel stays on `127.0.0.1` (loopback only).
+- All mutable state (config, SQLite database, Caddyfile, ACME certificates) is stored in the `naivepanel-data` named volume and survives image rebuilds.
+- On first boot the entrypoint initialises the database with `--setup`. Subsequent restarts skip init (keyed on the presence of the database file).
+- `docker compose pull && docker compose up -d` is the upgrade path; no data is lost.
+
+> **macOS / Windows Docker Desktop:** host networking is not supported. You can still build and develop, but the panel and Caddy won't bind to your host network.
+
+### Option B — Bare-metal (systemd)
+
 Run the following on your Linux server (Ubuntu / Debian / CentOS / Fedora / Arch) **as root**:
 
 ```bash
@@ -78,15 +108,13 @@ The admin panel intentionally listens only on `127.0.0.1`. After installation, t
 ssh -L <panel-port>:127.0.0.1:<panel-port> root@<server-ip>
 ```
 
-### Update
-
-To update NaivePanel to the latest version (rebuilds binary, keeps config):
+#### Update
 
 ```bash
 bash <(curl -sL https://raw.githubusercontent.com/mat-674/naivepanel/main/scripts/install.sh) --update
 ```
 
-### Uninstall
+#### Uninstall
 
 ```bash
 bash <(curl -sL https://raw.githubusercontent.com/mat-674/naivepanel/main/scripts/install.sh) --uninstall

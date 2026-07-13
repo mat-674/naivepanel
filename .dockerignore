@@ -1,0 +1,17 @@
+# Keep the build context small and reproducible.
+.git
+.gitignore
+.gitattributes
+bin/
+*.exe
+naivepanel
+naivepanel-*
+*.db
+*.db-wal
+*.db-shm
+/Caddyfile
+node_modules/
+package.json
+package-lock.json
+assets/
+*.md

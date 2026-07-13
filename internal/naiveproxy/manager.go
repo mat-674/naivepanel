@@ -152,6 +152,13 @@ func (m *Manager) Reload() error {
 	return nil
 }
 
+// UsesSystemd reports whether the manager delegates the proxy lifecycle to a
+// systemd unit. When false (for example inside a container), the panel itself
+// is responsible for starting NaiveProxy as a child process.
+func (m *Manager) UsesSystemd() bool {
+	return m.useSystemd
+}
+
 // IsRunning returns whether NaiveProxy is currently running
 func (m *Manager) IsRunning() bool {
 	if m.useSystemd {

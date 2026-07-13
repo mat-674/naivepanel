@@ -30,6 +30,7 @@ func main() {
 	port := flag.Int("port", 0, "Panel port (overrides config)")
 	bind := flag.String("bind", "", "Loopback address for the panel (overrides config)")
 	setup := flag.Bool("setup", false, "Initialize database and print credentials, then exit")
+	startProxy := flag.Bool("start-proxy", false, "Start NaiveProxy as a child process at boot (for non-systemd hosts such as containers)")
 	domain := flag.String("domain", "", "Domain for NaiveProxy (e.g. proxy.example.com)")
 	tlsEmail := flag.String("tls-email", "", "Email for Let's Encrypt TLS certificate")
 	createUser := flag.Bool("create-user", false, "Create a proxy user during setup")
@@ -187,6 +188,17 @@ func main() {
 	// Initialize NaiveProxy manager
 	manager := naiveproxy.NewManager(cfg.NaiveBinary, cfg.CaddyfilePath)
 
+	// On non-systemd hosts (e.g. containers) the panel supervises NaiveProxy
+	// itself. Under systemd the dedicated unit owns the lifecycle, so the flag
+	// is ignored to avoid a second, unmanaged process.
+	if *startProxy {
+		if manager.UsesSystemd() {
+			log.Println("--start-proxy ignored: NaiveProxy is managed by systemd")
+		} else {
+			startProxyProcess(db, manager, cfg.PanelUpstream())
+		}
+	}
+
 	// Create handlers
 	authHandler := &handlers.AuthHandler{DB: db, JWTSecret: cfg.JWTSecret}
 	userHandler := &handlers.UserHandler{DB: db, Manager: manager, PanelUpstream: cfg.PanelUpstream()}
@@ -259,4 +271,36 @@ func main() {
 	if err := server.ListenAndServe(); err != http.ErrServerClosed {
 		log.Fatalf("Server error: %v", err)
 	}
+}
+
+// startProxyProcess writes a fresh Caddyfile from the current settings and
+// starts NaiveProxy as a child process. Failures are logged, not fatal: the
+// panel must stay up so the operator can fix the configuration from the UI.
+func startProxyProcess(db *database.DB, manager *naiveproxy.Manager, panelUpstream string) {
+	settings, err := db.GetSettings()
+	if err != nil {
+		log.Printf("Autostart skipped: failed to read settings: %v", err)
+		return
+	}
+	users, err := db.GetEnabledUsers()
+	if err != nil {
+		log.Printf("Autostart skipped: failed to read users: %v", err)
+		return
+	}
+
+	content, err := naiveproxy.GenerateCaddyfile(settings, users, panelUpstream)
+	if err != nil {
+		log.Printf("Autostart skipped: failed to generate Caddyfile: %v", err)
+		return
+	}
+	if err := manager.WriteCaddyfile(content); err != nil {
+		log.Printf("Autostart skipped: failed to write Caddyfile: %v", err)
+		return
+	}
+
+	if err := manager.Start(); err != nil {
+		log.Printf("Autostart: failed to start NaiveProxy: %v", err)
+		return
+	}
+	log.Println("NaiveProxy started")
 }

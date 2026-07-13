@@ -1,0 +1,30 @@
+services:
+  naivepanel:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: naivepanel:latest
+    container_name: naivepanel
+    restart: unless-stopped
+
+    # Host networking mirrors the bare-metal model: the admin panel stays on
+    # 127.0.0.1 (reach it over an SSH tunnel), while Caddy binds the host's
+    # public :443 (and :80 for ACME) directly. Bridge mode would hide the
+    # loopback panel from the host, so host mode is required on Linux.
+    network_mode: host
+
+    # First-boot setup values. All optional; anything left blank is
+    # auto-generated (credentials) or configured later in the UI (domain/TLS).
+    environment:
+      DOMAIN: "${DOMAIN:-}"
+      TLS_EMAIL: "${TLS_EMAIL:-}"
+      ADMIN_USER: "${ADMIN_USER:-}"
+      ADMIN_PASS: "${ADMIN_PASS:-}"
+      PROXY_USER: "${PROXY_USER:-}"
+      PROXY_PASS: "${PROXY_PASS:-}"
+
+    volumes:
+      - naivepanel-data:/opt/naivepanel
+
+volumes:
+  naivepanel-data:
