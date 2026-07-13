@@ -1,0 +1,24 @@
+# Build output
+/bin/
+naivepanel
+naivepanel-*
+*.exe
+
+# Runtime data (SQLite DB, generated Caddyfile)
+*.db
+*.db-wal
+*.db-shm
+/Caddyfile
+
+# Node — this is a Go project with a no-build vanilla-JS frontend.
+# npm artifacts do not belong here.
+node_modules/
+package.json
+package-lock.json
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
