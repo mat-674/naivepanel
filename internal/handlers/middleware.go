@@ -9,6 +9,27 @@ import (
 	"strings"
 )
 
+// MaxRequestSize caps request bodies. Every write endpoint takes a small JSON
+// document, so this only ever trips on a malformed or hostile request.
+const MaxRequestSize = 1 << 20 // 1MB
+
+// Harden wraps the whole server: it caps request bodies and sets response
+// headers that apply to the SPA, the subscription route and the API alike.
+// Applying it once at the mux boundary keeps individual route registrations
+// readable and means a new route cannot forget it.
+func Harden(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, MaxRequestSize)
+
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
+
+		next.ServeHTTP(w, r)
+	})
+}
+
 // AuthMiddleware validates JWT tokens on protected routes
 func AuthMiddleware(jwtSecret string, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

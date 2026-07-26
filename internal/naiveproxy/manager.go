@@ -263,8 +263,8 @@ func (m *Manager) UpdatePanel() error {
 		return fmt.Errorf("in-panel update requires the dedicated systemd services; run the installer with --update manually")
 	}
 
-	// Execute the update script in the background
-	scriptPath := "/opt/naivepanel/scripts/install.sh"
+	// Hard-code the script path to prevent command injection via modified config
+	const scriptPath = "/opt/naivepanel/scripts/install.sh"
 	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
 		return fmt.Errorf("update script not found at %s", scriptPath)
 	}

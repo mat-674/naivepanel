@@ -107,12 +107,13 @@ func (h *UserHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	user, err := h.DB.CreateUser(req)
 	if err != nil {
-		jsonError(w, fmt.Sprintf("failed to create user: %v", err), http.StatusInternalServerError)
+		log.Printf("Failed to create user: %v", err)
+		jsonError(w, "failed to create user", http.StatusInternalServerError)
 		return
 	}
 
 	// Regenerate Caddyfile
-	h.regenerateCaddyfile()
+	RegenerateCaddyfile(h.DB, h.Manager, h.PanelUpstream)
 
 	jsonResponse(w, models.APIResponse{
 		Success: true,
@@ -148,7 +149,7 @@ func (h *UserHandler) Update(w http.ResponseWriter, r *http.Request, id int64) {
 	}
 
 	// Regenerate Caddyfile
-	h.regenerateCaddyfile()
+	RegenerateCaddyfile(h.DB, h.Manager, h.PanelUpstream)
 
 	user, _ := h.DB.GetUser(id)
 	jsonSuccess(w, "user updated", user)
@@ -167,7 +168,7 @@ func (h *UserHandler) Delete(w http.ResponseWriter, r *http.Request, id int64) {
 	}
 
 	// Regenerate Caddyfile
-	h.regenerateCaddyfile()
+	RegenerateCaddyfile(h.DB, h.Manager, h.PanelUpstream)
 
 	jsonSuccess(w, "user deleted", nil)
 }
@@ -208,38 +209,6 @@ func (h *UserHandler) GetLink(w http.ResponseWriter, r *http.Request, id int64) 
 		URI:    uri,
 		QRCode: qrBase64,
 	})
-}
-
-func (h *UserHandler) regenerateCaddyfile() {
-	settings, err := h.DB.GetSettings()
-	if err != nil {
-		log.Printf("Failed to get settings for caddyfile regen: %v", err)
-		return
-	}
-
-	users, err := h.DB.GetEnabledUsers()
-	if err != nil {
-		log.Printf("Failed to get users for caddyfile regen: %v", err)
-		return
-	}
-
-	content, err := naiveproxy.GenerateCaddyfile(settings, users, h.PanelUpstream)
-	if err != nil {
-		log.Printf("Failed to generate caddyfile: %v", err)
-		return
-	}
-
-	if err := h.Manager.WriteCaddyfile(content); err != nil {
-		log.Printf("Failed to write caddyfile: %v", err)
-		return
-	}
-
-	// Reload if running
-	if h.Manager.IsRunning() {
-		if err := h.Manager.Reload(); err != nil {
-			log.Printf("Failed to reload naiveproxy: %v", err)
-		}
-	}
 }
 
 func parseID(s string) (int64, error) {
