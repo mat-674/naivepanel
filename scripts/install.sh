@@ -55,6 +55,19 @@ log_ok() { echo -e "${GREEN}[OK]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
+# panel_version echoes the version to stamp into the binary via -ldflags -X.
+# Must be run from the source tree. Falls back to "dev" when git is unavailable
+# or the tree is not a repository (tarball export, --depth clone without tags).
+panel_version() {
+    local v=""
+    if command -v git &> /dev/null && git rev-parse --git-dir &> /dev/null; then
+        v=$(git describe --tags --always --dirty 2>/dev/null || true)
+    fi
+    # Keep only characters that are safe inside an unquoted -ldflags token.
+    v=$(printf '%s' "$v" | tr -cd 'A-Za-z0-9._+-')
+    echo "${v:-dev}"
+}
+
 check_root() {
     if [[ $EUID -ne 0 ]]; then
         log_error "This script must be run as root"
@@ -210,14 +223,85 @@ setup_wizard() {
     echo -e "${YELLOW}   A domain is required for valid SSL. Make sure DNS A record points here.${NC}"
     echo -e "${YELLOW}   Leave empty to skip (self-signed TLS, may cause browser errors).${NC}"
     echo ""
-    read -p "   Domain (e.g. proxy.example.com): " USER_DOMAIN
-    if [[ -n "$USER_DOMAIN" ]]; then
-        read -p "   Email for Let's Encrypt: " USER_TLS_EMAIL
-        log_ok "Domain: ${USER_DOMAIN}"
-    else
-        USER_TLS_EMAIL=""
-        log_warn "No domain. Self-signed TLS will be used."
-    fi
+    while true; do
+        read -p "   Domain (e.g. proxy.example.com): " USER_DOMAIN
+        # Trim whitespace and trailing dots (aligns with backend NormalizeDomain)
+        USER_DOMAIN=$(echo "$USER_DOMAIN" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | sed 's/\.$//')
+
+        if [[ -n "$USER_DOMAIN" ]]; then
+            # Reject schemes and paths early
+            if [[ "$USER_DOMAIN" =~ ^https?:// ]] || [[ "$USER_DOMAIN" =~ / ]]; then
+                log_error "Domain must not include a scheme or path. Just the hostname."
+                log_error "Example: proxy.example.com (not https://proxy.example.com/path)"
+                continue
+            fi
+
+            # Check if it's a valid IP address (IPv4 or IPv6)
+            if [[ "$USER_DOMAIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || \
+               [[ "$USER_DOMAIN" =~ ^(\[)?[0-9a-fA-F:]+(\])?$ ]]; then
+                # Valid IP, skip to email prompt
+                read -p "   Email for Let's Encrypt: " USER_TLS_EMAIL
+                USER_TLS_EMAIL=$(echo "$USER_TLS_EMAIL" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+
+                # Validate email if provided
+                if [[ -n "$USER_TLS_EMAIL" ]]; then
+                    if [[ "$USER_TLS_EMAIL" =~ ^[^@]+@[^@]+\.[^@]+$ ]]; then
+                        log_ok "Domain: ${USER_DOMAIN}"
+                        break
+                    else
+                        log_error "Invalid email format. Must contain @ and a domain (e.g. admin@example.com)"
+                        continue
+                    fi
+                else
+                    log_ok "Domain: ${USER_DOMAIN}"
+                    break
+                fi
+            fi
+
+            # Validate as DNS name: alphanumerics, dots, hyphens
+            # Must start and end with alphanumeric, labels separated by dots
+            if [[ "$USER_DOMAIN" =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$ ]]; then
+                # Additional check: no leading/trailing hyphens in labels, no empty labels
+                local VALID=true
+                IFS='.' read -ra LABELS <<< "$USER_DOMAIN"
+                for LABEL in "${LABELS[@]}"; do
+                    if [[ -z "$LABEL" ]] || [[ "$LABEL" =~ ^- ]] || [[ "$LABEL" =~ -$ ]] || [[ ${#LABEL} -gt 63 ]]; then
+                        VALID=false
+                        break
+                    fi
+                done
+
+                if [[ "$VALID" == true ]]; then
+                    read -p "   Email for Let's Encrypt: " USER_TLS_EMAIL
+                    USER_TLS_EMAIL=$(echo "$USER_TLS_EMAIL" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+
+                    # Validate email if provided
+                    if [[ -n "$USER_TLS_EMAIL" ]]; then
+                        if [[ "$USER_TLS_EMAIL" =~ ^[^@]+@[^@]+\.[^@]+$ ]]; then
+                            log_ok "Domain: ${USER_DOMAIN}"
+                            break
+                        else
+                            log_error "Invalid email format. Must contain @ and a domain (e.g. admin@example.com)"
+                            continue
+                        fi
+                    else
+                        log_ok "Domain: ${USER_DOMAIN}"
+                        break
+                    fi
+                else
+                    log_error "Invalid domain format. Labels must not start or end with hyphens or exceed 63 characters."
+                    log_error "Example: proxy.example.com"
+                fi
+            else
+                log_error "Invalid domain format. Use alphanumerics, dots, and hyphens only."
+                log_error "Example: proxy.example.com"
+            fi
+        else
+            USER_TLS_EMAIL=""
+            log_warn "No domain. Self-signed TLS will be used."
+            break
+        fi
+    done
     echo ""
 
     # --- Admin ---
@@ -265,8 +349,10 @@ build_panel() {
     fi
 
     cd "$BUILD_DIR"
-    log_info "Compiling (this may take a minute)..."
-    if ! go build -ldflags="-s -w" -o "${INSTALL_DIR}/naivepanel" main.go; then
+    local VERSION
+    VERSION=$(panel_version)
+    log_info "Compiling version ${VERSION} (this may take a minute)..."
+    if ! go build -ldflags="-s -w -X main.version=${VERSION}" -o "${INSTALL_DIR}/naivepanel" main.go; then
         log_error "Failed to build NaivePanel. Ensure Go is properly installed."
         cd - > /dev/null
         return 1
@@ -426,14 +512,25 @@ setup_wizard_docker() {
     echo -e "${BOLD}1. Domain & TLS${NC}"
     echo -e "${YELLOW}   Optional. Leave empty to use self-signed TLS (configure later in the UI).${NC}"
     echo ""
-    read -p "   Domain (e.g. proxy.example.com): " USER_DOMAIN
-    if [[ -n "$USER_DOMAIN" ]]; then
-        read -p "   Email for Let's Encrypt: " USER_TLS_EMAIL
-        log_ok "Domain: ${USER_DOMAIN}"
-    else
-        USER_TLS_EMAIL=""
-        log_warn "No domain. Self-signed TLS will be used."
-    fi
+    while true; do
+        read -p "   Domain (e.g. proxy.example.com): " USER_DOMAIN
+        # Trim whitespace
+        USER_DOMAIN=$(echo "$USER_DOMAIN" | xargs)
+        if [[ -n "$USER_DOMAIN" ]]; then
+            # Validate DNS-safe format: letters, digits, dots, hyphens only
+            if [[ "$USER_DOMAIN" =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$ ]]; then
+                read -p "   Email for Let's Encrypt: " USER_TLS_EMAIL
+                log_ok "Domain: ${USER_DOMAIN}"
+                break
+            else
+                log_error "Invalid domain format. Use letters, digits, dots and hyphens only (e.g. proxy.example.com)"
+            fi
+        else
+            USER_TLS_EMAIL=""
+            log_warn "No domain. Self-signed TLS will be used."
+            break
+        fi
+    done
     echo ""
     echo -e "${GREEN}${BOLD}Setup wizard complete.${NC}"
     echo ""
@@ -538,11 +635,46 @@ install_docker() {
     fi
 
     # --- Build and start ---
-    log_info "Building image (compiles NaiveProxy + panel; first build takes a few minutes)..."
+    log_info "Building Docker image (first run may take several minutes)..."
     ${COMPOSE} build
 
     log_info "Starting the stack..."
-    ${COMPOSE} up -d
+    ${COMPOSE} up --build --detach
+
+    # --- Poll until container is running ---
+    log_info "Waiting for container to start..."
+    echo -n "  "
+    local MAX_WAIT=180  # 3 minutes (180 * 2s = 6min total)
+    local count=0
+    local container_running=false
+    while [[ $count -lt $MAX_WAIT ]]; do
+        # Check container status using ps output
+        local STATUS="$(${COMPOSE} ps --status running 2>/dev/null | grep naivepanel || true)"
+        if [[ -n "${STATUS}" ]]; then
+            container_running=true
+            break
+        fi
+
+        # Check if container exited with error
+        local EXITED="$(${COMPOSE} ps --status exited 2>/dev/null | grep naivepanel || true)"
+        if [[ -n "${EXITED}" ]]; then
+            echo ""
+            log_error "Container failed to start. Check: ${COMPOSE} logs"
+            exit 1
+        fi
+
+        echo -n "."
+        sleep 2
+        count=$((count + 1))
+    done
+    echo ""
+
+    if [[ "${container_running}" == false ]]; then
+        log_error "Container did not start within expected time. Check: ${COMPOSE} logs"
+        exit 1
+    fi
+
+    log_ok "Container is up"
 
     # --- Wait for readiness and surface credentials ---
     log_info "Waiting for first-boot initialisation..."
@@ -671,7 +803,10 @@ update_panel() {
     rm -rf "$BUILD_DIR"
     git clone "https://github.com/${PANEL_REPO}.git" "$BUILD_DIR" --quiet
     cd "$BUILD_DIR"
-    go build -ldflags="-s -w" -o "${INSTALL_DIR}/naivepanel" main.go
+    local VERSION
+    VERSION=$(panel_version)
+    log_info "Compiling version ${VERSION}..."
+    go build -ldflags="-s -w -X main.version=${VERSION}" -o "${INSTALL_DIR}/naivepanel" main.go
     chmod +x "${INSTALL_DIR}/naivepanel"
     mkdir -p "${INSTALL_DIR}/scripts"
     cp scripts/install.sh "${INSTALL_DIR}/scripts/install.sh"

@@ -1,6 +1,7 @@
 package naiveproxy
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -26,6 +27,23 @@ type Manager struct {
 }
 
 const defaultServiceName = "naiveproxy"
+
+// updateScriptPath is hard-coded to prevent command injection via modified config.
+const updateScriptPath = "/opt/naivepanel/scripts/install.sh"
+
+// Sentinel errors describing conditions an operator can act on, as opposed to
+// failures whose text carries systemctl/systemd-run output. Callers that expose
+// errors over HTTP may relay these verbatim; anything else must be logged
+// server-side and reported generically.
+var (
+	// ErrUpdateUnsupported means the panel is not managed by the dedicated
+	// systemd units, so it cannot hand the update off to systemd-run.
+	ErrUpdateUnsupported = errors.New("in-panel update requires the dedicated systemd services; run the installer with --update manually")
+
+	// ErrUpdateScriptMissing means the installer copy the updater shells out to
+	// is not present at its fixed path.
+	ErrUpdateScriptMissing = errors.New("update script not found at " + updateScriptPath)
+)
 
 // NewManager creates a new NaiveProxy process manager
 func NewManager(binaryPath, caddyfilePath string) *Manager {
@@ -260,13 +278,13 @@ func (m *Manager) WriteCaddyfile(content string) error {
 // UpdatePanel triggers the installation script to update the panel
 func (m *Manager) UpdatePanel() error {
 	if !m.useSystemd {
-		return fmt.Errorf("in-panel update requires the dedicated systemd services; run the installer with --update manually")
+		return ErrUpdateUnsupported
 	}
 
-	// Hard-code the script path to prevent command injection via modified config
-	const scriptPath = "/opt/naivepanel/scripts/install.sh"
-	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
-		return fmt.Errorf("update script not found at %s", scriptPath)
+	// updateScriptPath is a fixed constant, never config-derived, to prevent
+	// command injection into the exec below.
+	if _, err := os.Stat(updateScriptPath); os.IsNotExist(err) {
+		return ErrUpdateScriptMissing
 	}
 
 	// The updater must not belong to the panel service cgroup: the update
@@ -276,7 +294,7 @@ func (m *Manager) UpdatePanel() error {
 		"--unit=naivepanel-update",
 		"--collect",
 		"--service-type=exec",
-		"bash", scriptPath, "--update",
+		"bash", updateScriptPath, "--update",
 	)
 
 	// Start the command asynchronously

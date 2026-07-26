@@ -24,6 +24,14 @@ import (
 //go:embed web/*
 var webFS embed.FS
 
+// version is stamped at build time:
+//
+//	go build -ldflags "-X main.version=$(git describe --tags --always --dirty)"
+//
+// build.bat and scripts/install.sh both do this. An unstamped build reports
+// "dev" rather than pretending to be a release.
+var version = "dev"
+
 func main() {
 	configPath := flag.String("config", "", "Path to config file")
 	dataDir := flag.String("data-dir", "", "Data directory")
@@ -224,7 +232,7 @@ func main() {
 	authHandler := &handlers.AuthHandler{DB: db, JWTSecret: cfg.JWTSecret}
 	userHandler := &handlers.UserHandler{DB: db, Manager: manager, PanelUpstream: cfg.PanelUpstream()}
 	settingsHandler := &handlers.SettingsHandler{DB: db, Manager: manager, PanelUpstream: cfg.PanelUpstream()}
-	statusHandler := &handlers.StatusHandler{DB: db, Manager: manager}
+	statusHandler := &handlers.StatusHandler{DB: db, Manager: manager, Version: version}
 	subHandler := &handlers.SubHandler{DB: db}
 
 	// Setup routes
