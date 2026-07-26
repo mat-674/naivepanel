@@ -47,12 +47,6 @@ async function initDashboard() {
                 <div class="text-muted" style="font-size:0.875rem;">System: ${status.system_uptime || 'N/A'}</div>
             </div>
 
-            <div class="glass-panel stat-card">
-                <div class="stat-title">Global Traffic</div>
-                <div class="stat-value text-warning">↑ ${formatBytes(status.total_up)}</div>
-                <div class="text-muted" style="font-size:0.875rem;">↓ ${formatBytes(status.total_down)}</div>
-            </div>
-
             <div class="glass-panel stat-card" style="grid-column: 1 / -1;">
                 <div class="stat-title">System</div>
                 <div class="stat-value" style="font-size:1.5rem;">${status.system_os} / ${status.system_arch}</div>
