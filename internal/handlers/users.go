@@ -20,50 +20,79 @@ type UserHandler struct {
 	PanelUpstream string
 }
 
-// ServeHTTP routes user requests
+// ServeHTTP routes user requests. The path shape is resolved first and the
+// method second: a known path reached with the wrong method answers 405, an
+// unknown path 404, and only an unparseable id answers 400.
 func (h *UserHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Parse path: /api/users or /api/users/{id} or /api/users/{id}/link
+	// Strip the mount prefix, leaving "", "{id}", "{id}/link" or
+	// "{id}/hwid/reset".
 	path := strings.TrimPrefix(r.URL.Path, "/api/users")
 	path = strings.TrimPrefix(path, "/")
 
-	switch {
-	case path == "" && r.Method == http.MethodGet:
-		h.List(w, r)
-	case path == "" && r.Method == http.MethodPost:
-		h.Create(w, r)
-	case r.Method == http.MethodPut:
-		id, err := parseID(path)
-		if err != nil {
-			jsonError(w, "invalid user id", http.StatusBadRequest)
-			return
+	// The collection itself carries no id.
+	if path == "" {
+		switch r.Method {
+		case http.MethodGet:
+			h.List(w, r)
+		case http.MethodPost:
+			h.Create(w, r)
+		default:
+			methodNotAllowed(w, http.MethodGet, http.MethodPost)
 		}
-		h.Update(w, r, id)
-	case r.Method == http.MethodDelete:
-		id, err := parseID(path)
-		if err != nil {
-			jsonError(w, "invalid user id", http.StatusBadRequest)
-			return
+		return
+	}
+
+	idStr, action := path, ""
+	if i := strings.Index(path, "/"); i >= 0 {
+		idStr, action = path[:i], path[i+1:]
+	}
+
+	// Resolve the action to the handler for this method, plus the methods the
+	// action does accept so a mismatch can advertise them.
+	var handler func(w http.ResponseWriter, r *http.Request, id int64)
+	var allow []string
+	switch action {
+	case "":
+		allow = []string{http.MethodPut, http.MethodDelete}
+		switch r.Method {
+		case http.MethodPut:
+			handler = h.Update
+		case http.MethodDelete:
+			handler = h.Delete
 		}
-		h.Delete(w, r, id)
-	case strings.HasSuffix(path, "/link"):
-		idStr := strings.TrimSuffix(path, "/link")
-		id, err := parseID(idStr)
-		if err != nil {
-			jsonError(w, "invalid user id", http.StatusBadRequest)
-			return
+	case "link":
+		allow = []string{http.MethodGet}
+		if r.Method == http.MethodGet {
+			handler = h.GetLink
 		}
-		h.GetLink(w, r, id)
-	case strings.HasSuffix(path, "/hwid/reset") && r.Method == http.MethodPost:
-		idStr := strings.TrimSuffix(path, "/hwid/reset")
-		id, err := parseID(idStr)
-		if err != nil {
-			jsonError(w, "invalid user id", http.StatusBadRequest)
-			return
+	case "hwid/reset":
+		allow = []string{http.MethodPost}
+		if r.Method == http.MethodPost {
+			handler = h.ResetHWID
 		}
-		h.ResetHWID(w, r, id)
 	default:
 		jsonError(w, "not found", http.StatusNotFound)
+		return
 	}
+
+	if handler == nil {
+		methodNotAllowed(w, allow...)
+		return
+	}
+
+	id, err := parseID(idStr)
+	if err != nil {
+		jsonError(w, "invalid user id", http.StatusBadRequest)
+		return
+	}
+
+	handler(w, r, id)
+}
+
+// methodNotAllowed answers 405 and advertises the methods the path does accept.
+func methodNotAllowed(w http.ResponseWriter, allow ...string) {
+	w.Header().Set("Allow", strings.Join(allow, ", "))
+	jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
 }
 
 // List handles GET /api/users
@@ -107,12 +136,13 @@ func (h *UserHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	user, err := h.DB.CreateUser(req)
 	if err != nil {
-		jsonError(w, fmt.Sprintf("failed to create user: %v", err), http.StatusInternalServerError)
+		log.Printf("Failed to create user: %v", err)
+		jsonError(w, "failed to create user", http.StatusInternalServerError)
 		return
 	}
 
 	// Regenerate Caddyfile
-	h.regenerateCaddyfile()
+	RegenerateCaddyfile(h.DB, h.Manager, h.PanelUpstream)
 
 	jsonResponse(w, models.APIResponse{
 		Success: true,
@@ -148,7 +178,7 @@ func (h *UserHandler) Update(w http.ResponseWriter, r *http.Request, id int64) {
 	}
 
 	// Regenerate Caddyfile
-	h.regenerateCaddyfile()
+	RegenerateCaddyfile(h.DB, h.Manager, h.PanelUpstream)
 
 	user, _ := h.DB.GetUser(id)
 	jsonSuccess(w, "user updated", user)
@@ -167,7 +197,7 @@ func (h *UserHandler) Delete(w http.ResponseWriter, r *http.Request, id int64) {
 	}
 
 	// Regenerate Caddyfile
-	h.regenerateCaddyfile()
+	RegenerateCaddyfile(h.DB, h.Manager, h.PanelUpstream)
 
 	jsonSuccess(w, "user deleted", nil)
 }
@@ -208,38 +238,6 @@ func (h *UserHandler) GetLink(w http.ResponseWriter, r *http.Request, id int64) 
 		URI:    uri,
 		QRCode: qrBase64,
 	})
-}
-
-func (h *UserHandler) regenerateCaddyfile() {
-	settings, err := h.DB.GetSettings()
-	if err != nil {
-		log.Printf("Failed to get settings for caddyfile regen: %v", err)
-		return
-	}
-
-	users, err := h.DB.GetEnabledUsers()
-	if err != nil {
-		log.Printf("Failed to get users for caddyfile regen: %v", err)
-		return
-	}
-
-	content, err := naiveproxy.GenerateCaddyfile(settings, users, h.PanelUpstream)
-	if err != nil {
-		log.Printf("Failed to generate caddyfile: %v", err)
-		return
-	}
-
-	if err := h.Manager.WriteCaddyfile(content); err != nil {
-		log.Printf("Failed to write caddyfile: %v", err)
-		return
-	}
-
-	// Reload if running
-	if h.Manager.IsRunning() {
-		if err := h.Manager.Reload(); err != nil {
-			log.Printf("Failed to reload naiveproxy: %v", err)
-		}
-	}
 }
 
 func parseID(s string) (int64, error) {

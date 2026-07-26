@@ -24,6 +24,14 @@ import (
 //go:embed web/*
 var webFS embed.FS
 
+// version is stamped at build time:
+//
+//	go build -ldflags "-X main.version=$(git describe --tags --always --dirty)"
+//
+// build.bat and scripts/install.sh both do this. An unstamped build reports
+// "dev" rather than pretending to be a release.
+var version = "dev"
+
 func main() {
 	configPath := flag.String("config", "", "Path to config file")
 	dataDir := flag.String("data-dir", "", "Data directory")
@@ -224,7 +232,7 @@ func main() {
 	authHandler := &handlers.AuthHandler{DB: db, JWTSecret: cfg.JWTSecret}
 	userHandler := &handlers.UserHandler{DB: db, Manager: manager, PanelUpstream: cfg.PanelUpstream()}
 	settingsHandler := &handlers.SettingsHandler{DB: db, Manager: manager, PanelUpstream: cfg.PanelUpstream()}
-	statusHandler := &handlers.StatusHandler{DB: db, Manager: manager}
+	statusHandler := &handlers.StatusHandler{DB: db, Manager: manager, Version: version}
 	subHandler := &handlers.SubHandler{DB: db}
 
 	// Setup routes
@@ -269,7 +277,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           mux,
+		Handler:           handlers.Harden(mux),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second,
@@ -326,6 +334,30 @@ func startProxyProcess(db *database.DB, manager *naiveproxy.Manager, panelUpstre
 	log.Println("NaiveProxy started")
 }
 
+// regenerateCaddyfileAndReload is a helper used by enablePanelPublic and
+// disablePanelPublic to regenerate the Caddyfile after settings changes.
+func regenerateCaddyfileAndReload(db *database.DB, manager *naiveproxy.Manager, panelUpstream string) error {
+	settings, err := db.GetSettings()
+	if err != nil {
+		return fmt.Errorf("read settings: %w", err)
+	}
+	users, err := db.GetEnabledUsers()
+	if err != nil {
+		return fmt.Errorf("read users: %w", err)
+	}
+	content, err := naiveproxy.GenerateCaddyfile(settings, users, panelUpstream)
+	if err != nil {
+		return fmt.Errorf("generate caddyfile: %w", err)
+	}
+	if err := manager.WriteCaddyfile(content); err != nil {
+		return fmt.Errorf("write caddyfile: %w", err)
+	}
+	if err := manager.Reload(); err != nil {
+		log.Printf("NaiveProxy is not running, so the change will activate on its next start: %v", err)
+	}
+	return nil
+}
+
 // enablePanelPublic turns on the public /<path>/* route and writes a fresh
 // Caddyfile so Caddy picks it up on its next reload. Auto-generates Basic
 // Auth credentials when the corresponding flags are empty.
@@ -371,20 +403,9 @@ func enablePanelPublic(db *database.DB, cfg *config.Config, path, user, pass str
 		return fmt.Errorf("save settings: %w", err)
 	}
 
-	users, err := db.GetEnabledUsers()
-	if err != nil {
-		return fmt.Errorf("read users: %w", err)
-	}
-	content, err := naiveproxy.GenerateCaddyfile(settings, users, cfg.PanelUpstream())
-	if err != nil {
-		return fmt.Errorf("generate caddyfile: %w", err)
-	}
 	manager := naiveproxy.NewManager(cfg.NaiveBinary, cfg.CaddyfilePath)
-	if err := manager.WriteCaddyfile(content); err != nil {
-		return fmt.Errorf("write caddyfile: %w", err)
-	}
-	if err := manager.Reload(); err != nil {
-		log.Printf("NaiveProxy is not running, so the new route will activate on the next start: %v", err)
+	if err := regenerateCaddyfileAndReload(db, manager, cfg.PanelUpstream()); err != nil {
+		return err
 	}
 
 	scheme := "https"
@@ -420,20 +441,9 @@ func disablePanelPublic(db *database.DB, cfg *config.Config) error {
 		return fmt.Errorf("save settings: %w", err)
 	}
 
-	users, err := db.GetEnabledUsers()
-	if err != nil {
-		return fmt.Errorf("read users: %w", err)
-	}
-	content, err := naiveproxy.GenerateCaddyfile(settings, users, cfg.PanelUpstream())
-	if err != nil {
-		return fmt.Errorf("generate caddyfile: %w", err)
-	}
 	manager := naiveproxy.NewManager(cfg.NaiveBinary, cfg.CaddyfilePath)
-	if err := manager.WriteCaddyfile(content); err != nil {
-		return fmt.Errorf("write caddyfile: %w", err)
-	}
-	if err := manager.Reload(); err != nil {
-		log.Printf("NaiveProxy is not running, so the route removal will activate on the next start: %v", err)
+	if err := regenerateCaddyfileAndReload(db, manager, cfg.PanelUpstream()); err != nil {
+		return err
 	}
 
 	fmt.Println("Panel unpublished. It is reachable only via SSH tunnel on 127.0.0.1.")

@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"errors"
+	"log"
 	"naivepanel/internal/database"
 	"naivepanel/internal/models"
 	"naivepanel/internal/naiveproxy"
@@ -12,6 +14,9 @@ import (
 type StatusHandler struct {
 	DB      *database.DB
 	Manager *naiveproxy.Manager
+	// Version is the panel build identifier, injected at link time via
+	// -X main.version and threaded in from main. Empty means "unknown".
+	Version string
 }
 
 // GetStatus handles GET /api/status
@@ -21,15 +26,36 @@ func (h *StatusHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userCount, _ := h.DB.UserCount()
+	// A database read failure fails the whole response rather than degrading it:
+	// reporting 0 users / 0 traffic for a broken database is indistinguishable
+	// from a genuinely empty panel, and the dashboard would present the wrong
+	// numbers as fact.
+	userCount, err := h.DB.UserCount()
+	if err != nil {
+		log.Printf("Failed to count users for status: %v", err)
+		jsonError(w, "failed to read status", http.StatusInternalServerError)
+		return
+	}
+
+	users, err := h.DB.ListUsers()
+	if err != nil {
+		log.Printf("Failed to list users for status: %v", err)
+		jsonError(w, "failed to read status", http.StatusInternalServerError)
+		return
+	}
+
 	sysOS, sysArch := naiveproxy.GetSystemInfo()
 
 	// Calculate total traffic
-	users, _ := h.DB.ListUsers()
 	var totalUp, totalDown int64
 	for _, u := range users {
 		totalUp += u.TrafficUp
 		totalDown += u.TrafficDown
+	}
+
+	version := h.Version
+	if version == "" {
+		version = "unknown"
 	}
 
 	status := models.ServerStatus{
@@ -39,7 +65,7 @@ func (h *StatusHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
 		UserCount:    userCount,
 		TotalUp:      totalUp,
 		TotalDown:    totalDown,
-		Version:      "1.0.0",
+		Version:      version,
 		SystemOS:     sysOS,
 		SystemArch:   sysArch,
 		SystemUptime: naiveproxy.GetSystemUptime(),
@@ -73,9 +99,30 @@ func (h *StatusHandler) ServiceAction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
-		jsonError(w, err.Error(), http.StatusInternalServerError)
+		// Always keep the full error server-side; the client sees either a
+		// sentinel (operator-actionable deployment guidance, safe verbatim) or a
+		// generic message, because every other failure wraps raw systemctl /
+		// systemd-run output.
+		log.Printf("Service action %q failed: %v", action, err)
+
+		message := serviceActionFailureMessage(action)
+		if errors.Is(err, naiveproxy.ErrUpdateUnsupported) || errors.Is(err, naiveproxy.ErrUpdateScriptMissing) {
+			message = err.Error()
+		}
+		jsonError(w, message, http.StatusInternalServerError)
 		return
 	}
 
 	jsonSuccess(w, action+" successful", nil)
+}
+
+// serviceActionFailureMessage returns the generic, internals-free message shown
+// to the client when a lifecycle call fails. The detail lives in the panel log.
+func serviceActionFailureMessage(action string) string {
+	switch action {
+	case "update":
+		return "failed to launch the panel update, check the panel log"
+	default:
+		return "failed to " + action + " naiveproxy, check the panel log"
+	}
 }

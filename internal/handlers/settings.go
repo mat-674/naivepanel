@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"log"
 	"naivepanel/internal/database"
-	"naivepanel/internal/models"
 	"naivepanel/internal/naiveproxy"
 	"net/http"
 )
@@ -39,8 +38,16 @@ func (h *SettingsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var settings models.Settings
-	if err := json.NewDecoder(r.Body).Decode(&settings); err != nil {
+	// Start from the stored settings so keys the UI never sends — the
+	// panel-publication trio, managed by --panel-public-enable/-disable — are
+	// preserved instead of being cleared by a save from the Settings page.
+	settings, err := h.DB.GetSettings()
+	if err != nil {
+		log.Printf("Failed to read settings before update: %v", err)
+		jsonError(w, "failed to get settings", http.StatusInternalServerError)
+		return
+	}
+	if err := json.NewDecoder(r.Body).Decode(settings); err != nil {
 		jsonError(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -79,13 +86,22 @@ func (h *SettingsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	settings.SubPath = subPath
 
-	if err := h.DB.SaveSettings(&settings); err != nil {
+	// GenerateCaddyfile rejects this combination, and RegenerateCaddyfile only
+	// logs that failure — the save would appear to succeed while Caddy kept
+	// serving the previous config. Reject it here instead.
+	if settings.PanelPublic && settings.SubPath == settings.PanelPublicPath {
+		jsonError(w, "subscription path conflicts with the published panel path", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.DB.SaveSettings(settings); err != nil {
+		log.Printf("Failed to save settings: %v", err)
 		jsonError(w, "failed to save settings", http.StatusInternalServerError)
 		return
 	}
 
 	// Regenerate Caddyfile
-	h.regenerateCaddyfile()
+	RegenerateCaddyfile(h.DB, h.Manager, h.PanelUpstream)
 
 	jsonSuccess(w, "settings updated", settings)
 }
@@ -99,36 +115,5 @@ func (h *SettingsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.Update(w, r)
 	default:
 		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
-	}
-}
-
-func (h *SettingsHandler) regenerateCaddyfile() {
-	settings, err := h.DB.GetSettings()
-	if err != nil {
-		log.Printf("Failed to get settings for caddyfile regen: %v", err)
-		return
-	}
-
-	users, err := h.DB.GetEnabledUsers()
-	if err != nil {
-		log.Printf("Failed to get users for caddyfile regen: %v", err)
-		return
-	}
-
-	content, err := naiveproxy.GenerateCaddyfile(settings, users, h.PanelUpstream)
-	if err != nil {
-		log.Printf("Failed to generate caddyfile: %v", err)
-		return
-	}
-
-	if err := h.Manager.WriteCaddyfile(content); err != nil {
-		log.Printf("Failed to write caddyfile: %v", err)
-		return
-	}
-
-	if h.Manager.IsRunning() {
-		if err := h.Manager.Reload(); err != nil {
-			log.Printf("Failed to reload naiveproxy: %v", err)
-		}
 	}
 }
