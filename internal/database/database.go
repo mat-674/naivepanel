@@ -5,7 +5,10 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"naivepanel/internal/models"
+	"strconv"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -73,14 +76,38 @@ func (db *DB) migrate() error {
 		}
 	}
 
-	// Add new columns to existing proxy_users table (ignoring errors if they already exist)
-	db.conn.Exec("ALTER TABLE proxy_users ADD COLUMN hwid_limit INTEGER DEFAULT 0")
-	db.conn.Exec("ALTER TABLE proxy_users ADD COLUMN sub_token TEXT DEFAULT ''")
-	db.conn.Exec("ALTER TABLE proxy_users ADD COLUMN expires_at DATETIME")
-	db.conn.Exec("ALTER TABLE proxy_users ADD COLUMN hwid_reset_interval INTEGER DEFAULT 0")
-	db.conn.Exec("ALTER TABLE proxy_users ADD COLUMN last_hwid_reset DATETIME")
+	// Columns added to proxy_users after the initial release. SQLite has no
+	// ALTER TABLE ... ADD COLUMN IF NOT EXISTS, so on every start after the
+	// first these statements fail with "duplicate column name" -- that error is
+	// expected and swallowed to keep migrate() idempotent. Anything else (a
+	// corrupt, locked or read-only database) is a real failure and surfaces.
+	alters := []string{
+		"ALTER TABLE proxy_users ADD COLUMN hwid_limit INTEGER DEFAULT 0",
+		"ALTER TABLE proxy_users ADD COLUMN sub_token TEXT DEFAULT ''",
+		"ALTER TABLE proxy_users ADD COLUMN expires_at DATETIME",
+		"ALTER TABLE proxy_users ADD COLUMN hwid_reset_interval INTEGER DEFAULT 0",
+		"ALTER TABLE proxy_users ADD COLUMN last_hwid_reset DATETIME",
+	}
+
+	for _, q := range alters {
+		if _, err := db.conn.Exec(q); err != nil && !isDuplicateColumnErr(err) {
+			return fmt.Errorf("migration failed: %w", err)
+		}
+	}
 
 	return nil
+}
+
+// isDuplicateColumnErr reports whether err is the driver's response to adding a
+// column that already exists. Verified against mattn/go-sqlite3: it returns a
+// sqlite3.Error whose message is "duplicate column name: <column>". The text is
+// matched because SQLite reports this as a generic SQLITE_ERROR, with no
+// distinct extended result code to test instead.
+func isDuplicateColumnErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "duplicate column name")
 }
 
 // --- Admin ---
@@ -312,6 +339,89 @@ func (db *DB) GetAllSettings() (map[string]string, error) {
 	return settings, nil
 }
 
+// Defaults applied when a settings row is missing or holds an empty value.
+const (
+	defaultPort            = 443
+	defaultSubPath         = "sub"   // default Custom Sub URL Prefix
+	defaultPanelPublicPath = "panel" // default publish path under the main domain
+)
+
+// settingsField binds one row of the settings table to one field of
+// models.Settings. get renders the field as the stored string; set parses a
+// stored string back into the field and is also called with "" for rows that do
+// not exist yet, so each setter owns its own default.
+//
+// This slice is the single source of truth shared by GetSettings and
+// SaveSettings: adding a setting means adding one entry here (plus the struct
+// field in models.Settings and, usually, the Caddyfile template). The key
+// strings are persisted in existing installs and must not change.
+type settingsField struct {
+	key string
+	get func(*models.Settings) string
+	set func(*models.Settings, string)
+}
+
+var settingsFields = []settingsField{
+	{
+		key: "domain",
+		get: func(s *models.Settings) string { return s.Domain },
+		set: func(s *models.Settings, v string) { s.Domain = v },
+	},
+	{
+		key: "port",
+		get: func(s *models.Settings) string { return strconv.Itoa(s.Port) },
+		set: func(s *models.Settings, v string) {
+			s.Port = defaultPort
+			if v == "" {
+				return // no row stored yet; the default stands
+			}
+			n, err := strconv.Atoi(v)
+			if err != nil {
+				// Previously swallowed by fmt.Sscanf, which left a corrupt row
+				// looking exactly like an unconfigured one.
+				log.Printf("settings: unparseable port value %q, falling back to %d", v, defaultPort)
+				return
+			}
+			s.Port = n
+		},
+	},
+	{
+		key: "tls_email",
+		get: func(s *models.Settings) string { return s.TLSEmail },
+		set: func(s *models.Settings, v string) { s.TLSEmail = v },
+	},
+	{
+		key: "decoy_site",
+		get: func(s *models.Settings) string { return s.DecoySite },
+		set: func(s *models.Settings, v string) { s.DecoySite = v },
+	},
+	{
+		key: "sub_path",
+		get: func(s *models.Settings) string { return orDefault(s.SubPath, defaultSubPath) },
+		set: func(s *models.Settings, v string) { s.SubPath = orDefault(v, defaultSubPath) },
+	},
+	{
+		key: "panel_public",
+		get: func(s *models.Settings) string { return boolToSetting(s.PanelPublic) },
+		set: func(s *models.Settings, v string) { s.PanelPublic = v == "true" },
+	},
+	{
+		key: "panel_public_path",
+		get: func(s *models.Settings) string { return orDefault(s.PanelPublicPath, defaultPanelPublicPath) },
+		set: func(s *models.Settings, v string) { s.PanelPublicPath = orDefault(v, defaultPanelPublicPath) },
+	},
+	{
+		key: "panel_basic_user",
+		get: func(s *models.Settings) string { return s.PanelBasicUser },
+		set: func(s *models.Settings, v string) { s.PanelBasicUser = v },
+	},
+	{
+		key: "panel_basic_hash",
+		get: func(s *models.Settings) string { return s.PanelBasicHash },
+		set: func(s *models.Settings, v string) { s.PanelBasicHash = v },
+	},
+}
+
 // GetSettings returns parsed Settings struct
 func (db *DB) GetSettings() (*models.Settings, error) {
 	all, err := db.GetAllSettings()
@@ -319,59 +429,28 @@ func (db *DB) GetSettings() (*models.Settings, error) {
 		return nil, err
 	}
 
-	port := 443
-	if v, ok := all["port"]; ok {
-		fmt.Sscanf(v, "%d", &port)
+	var s models.Settings
+	for _, f := range settingsFields {
+		f.set(&s, all[f.key])
 	}
-
-	subPath := all["sub_path"]
-	if subPath == "" {
-		subPath = "sub" // default Custom Sub URL Prefix
-	}
-
-	panelPath := all["panel_public_path"]
-	if panelPath == "" {
-		panelPath = "panel" // default publish path under the main domain
-	}
-
-	return &models.Settings{
-		Domain:          all["domain"],
-		Port:            port,
-		TLSEmail:        all["tls_email"],
-		DecoySite:       all["decoy_site"],
-		SubPath:         subPath,
-		PanelPublic:     all["panel_public"] == "true",
-		PanelPublicPath: panelPath,
-		PanelBasicUser:  all["panel_basic_user"],
-		PanelBasicHash:  all["panel_basic_hash"],
-	}, nil
+	return &s, nil
 }
 
 // SaveSettings saves a Settings struct
 func (db *DB) SaveSettings(s *models.Settings) error {
-	panelPath := s.PanelPublicPath
-	if panelPath == "" {
-		panelPath = "panel"
-	}
-
-	pairs := map[string]string{
-		"domain":            s.Domain,
-		"port":              fmt.Sprintf("%d", s.Port),
-		"tls_email":         s.TLSEmail,
-		"decoy_site":        s.DecoySite,
-		"sub_path":          s.SubPath,
-		"panel_public":      boolToSetting(s.PanelPublic),
-		"panel_public_path": panelPath,
-		"panel_basic_user":  s.PanelBasicUser,
-		"panel_basic_hash":  s.PanelBasicHash,
-	}
-
-	for key, value := range pairs {
-		if err := db.SetSetting(key, value); err != nil {
+	for _, f := range settingsFields {
+		if err := db.SetSetting(f.key, f.get(s)); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func orDefault(v, def string) string {
+	if v == "" {
+		return def
+	}
+	return v
 }
 
 func boolToSetting(b bool) string {
